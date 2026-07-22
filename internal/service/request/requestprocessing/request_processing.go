@@ -6,7 +6,7 @@ import (
 	"github.com/Antrakos/provider-http-async/internal/jq"
 )
 
-// ApplyJQOnStr applies a jq query to a Request, returning the result as a string.
+// ApplyJQOnStr applies a jq query to a AsyncRequest, returning the result as a string.
 // The function handles complex results by converting them to JSON format.
 func ApplyJQOnStr(jqQuery string, baseMap map[string]interface{}) (string, error) {
 	if result, _ := jq.ParseMapInterface(jqQuery, baseMap); result != nil {
@@ -25,8 +25,8 @@ func ApplyJQOnStr(jqQuery string, baseMap map[string]interface{}) (string, error
 	return stringResult, nil
 }
 
-// ApplyJQOnMapStrings applies the provided JQ queries to a map of strings, using the given Request.
-// It generates a base JQ object from the provided Request and then parses the queries to produce the resulting map.
+// ApplyJQOnMapStrings applies the provided JQ queries to a map of strings, using the given AsyncRequest.
+// It generates a base JQ object from the provided AsyncRequest and then parses the queries to produce the resulting map.
 func ApplyJQOnMapStrings(keyToJQQueries map[string][]string, baseMap map[string]interface{}) (map[string][]string, error) {
 	return jq.ParseMapStrings(keyToJQQueries, baseMap)
 }

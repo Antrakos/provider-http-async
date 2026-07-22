@@ -1,5 +1,5 @@
-apiVersion: http.m.crossplane.io/v1alpha2
-kind: Request
+apiVersion: http.async.m.crossplane.io/v1alpha2
+kind: AsyncRequest
 metadata:
   name: manage-user-with-cluster-config
   namespace: default

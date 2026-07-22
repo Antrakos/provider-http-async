@@ -19,42 +19,42 @@ package v1alpha2
 
 import xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-// GetCondition of this Request.
-func (mg *Request) GetCondition(ct xpv2.ConditionType) xpv2.Condition {
+// GetCondition of this AsyncRequest.
+func (mg *AsyncRequest) GetCondition(ct xpv2.ConditionType) xpv2.Condition {
 	return mg.Status.GetCondition(ct)
 }
 
-// GetManagementPolicies of this Request.
-func (mg *Request) GetManagementPolicies() xpv2.ManagementPolicies {
+// GetManagementPolicies of this AsyncRequest.
+func (mg *AsyncRequest) GetManagementPolicies() xpv2.ManagementPolicies {
 	return mg.Spec.ManagementPolicies
 }
 
-// GetProviderConfigReference of this Request.
-func (mg *Request) GetProviderConfigReference() *xpv2.ProviderConfigReference {
+// GetProviderConfigReference of this AsyncRequest.
+func (mg *AsyncRequest) GetProviderConfigReference() *xpv2.ProviderConfigReference {
 	return mg.Spec.ProviderConfigReference
 }
 
-// GetWriteConnectionSecretToReference of this Request.
-func (mg *Request) GetWriteConnectionSecretToReference() *xpv2.LocalSecretReference {
+// GetWriteConnectionSecretToReference of this AsyncRequest.
+func (mg *AsyncRequest) GetWriteConnectionSecretToReference() *xpv2.LocalSecretReference {
 	return mg.Spec.WriteConnectionSecretToReference
 }
 
-// SetConditions of this Request.
-func (mg *Request) SetConditions(c ...xpv2.Condition) {
+// SetConditions of this AsyncRequest.
+func (mg *AsyncRequest) SetConditions(c ...xpv2.Condition) {
 	mg.Status.SetConditions(c...)
 }
 
-// SetManagementPolicies of this Request.
-func (mg *Request) SetManagementPolicies(r xpv2.ManagementPolicies) {
+// SetManagementPolicies of this AsyncRequest.
+func (mg *AsyncRequest) SetManagementPolicies(r xpv2.ManagementPolicies) {
 	mg.Spec.ManagementPolicies = r
 }
 
-// SetProviderConfigReference of this Request.
-func (mg *Request) SetProviderConfigReference(r *xpv2.ProviderConfigReference) {
+// SetProviderConfigReference of this AsyncRequest.
+func (mg *AsyncRequest) SetProviderConfigReference(r *xpv2.ProviderConfigReference) {
 	mg.Spec.ProviderConfigReference = r
 }
 
-// SetWriteConnectionSecretToReference of this Request.
-func (mg *Request) SetWriteConnectionSecretToReference(r *xpv2.LocalSecretReference) {
+// SetWriteConnectionSecretToReference of this AsyncRequest.
+func (mg *AsyncRequest) SetWriteConnectionSecretToReference(r *xpv2.LocalSecretReference) {
 	mg.Spec.WriteConnectionSecretToReference = r
 }

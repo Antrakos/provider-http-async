@@ -43,7 +43,7 @@ var (
 
 func Test_getMappingByMethod(t *testing.T) {
 	type args struct {
-		requestParams *v1alpha2.RequestParameters
+		requestParams *v1alpha2.AsyncRequestParameters
 		method        string
 	}
 	type want struct {
@@ -56,7 +56,7 @@ func Test_getMappingByMethod(t *testing.T) {
 	}{
 		"Fail": {
 			args: args{
-				requestParams: &v1alpha2.RequestParameters{
+				requestParams: &v1alpha2.AsyncRequestParameters{
 					Payload: v1alpha2.Payload{
 						Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 						BaseUrl: "https://api.example.com/users",
@@ -76,7 +76,7 @@ func Test_getMappingByMethod(t *testing.T) {
 		},
 		"Success": {
 			args: args{
-				requestParams: &v1alpha2.RequestParameters{
+				requestParams: &v1alpha2.AsyncRequestParameters{
 					Payload: v1alpha2.Payload{
 						Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 						BaseUrl: "https://api.example.com/users",
@@ -118,7 +118,7 @@ func Test_getMappingByMethod(t *testing.T) {
 
 func Test_getMappingByAction(t *testing.T) {
 	type args struct {
-		requestParams *v1alpha2.RequestParameters
+		requestParams *v1alpha2.AsyncRequestParameters
 		action        string
 	}
 	type want struct {
@@ -131,7 +131,7 @@ func Test_getMappingByAction(t *testing.T) {
 	}{
 		"Fail": {
 			args: args{
-				requestParams: &v1alpha2.RequestParameters{
+				requestParams: &v1alpha2.AsyncRequestParameters{
 					Payload: v1alpha2.Payload{
 						Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 						BaseUrl: "https://api.example.com/users",
@@ -151,7 +151,7 @@ func Test_getMappingByAction(t *testing.T) {
 		},
 		"Success": {
 			args: args{
-				requestParams: &v1alpha2.RequestParameters{
+				requestParams: &v1alpha2.AsyncRequestParameters{
 					Payload: v1alpha2.Payload{
 						Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 						BaseUrl: "https://api.example.com/users",
@@ -193,7 +193,7 @@ func Test_getMappingByAction(t *testing.T) {
 
 func Test_GetMapping(t *testing.T) {
 	type args struct {
-		requestParams *v1alpha2.RequestParameters
+		requestParams *v1alpha2.AsyncRequestParameters
 		action        string
 	}
 	type want struct {
@@ -206,7 +206,7 @@ func Test_GetMapping(t *testing.T) {
 	}{
 		"Fail": {
 			args: args{
-				requestParams: &v1alpha2.RequestParameters{
+				requestParams: &v1alpha2.AsyncRequestParameters{
 					Payload: v1alpha2.Payload{
 						Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 						BaseUrl: "https://api.example.com/users",
@@ -226,7 +226,7 @@ func Test_GetMapping(t *testing.T) {
 		},
 		"Success": {
 			args: args{
-				requestParams: &v1alpha2.RequestParameters{
+				requestParams: &v1alpha2.AsyncRequestParameters{
 					Payload: v1alpha2.Payload{
 						Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 						BaseUrl: "https://api.example.com/users",
@@ -247,7 +247,7 @@ func Test_GetMapping(t *testing.T) {
 		},
 		"SuccessWithoutMethod": {
 			args: args{
-				requestParams: &v1alpha2.RequestParameters{
+				requestParams: &v1alpha2.AsyncRequestParameters{
 					Payload: v1alpha2.Payload{
 						Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 						BaseUrl: "https://api.example.com/users",
@@ -277,7 +277,7 @@ func Test_GetMapping(t *testing.T) {
 		},
 		"SuccessWithoutAction": {
 			args: args{
-				requestParams: &v1alpha2.RequestParameters{
+				requestParams: &v1alpha2.AsyncRequestParameters{
 					Payload: v1alpha2.Payload{
 						Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 						BaseUrl: "https://api.example.com/users",

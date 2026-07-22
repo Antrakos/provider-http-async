@@ -16,7 +16,7 @@ import (
 func Test_CustomCheck(t *testing.T) {
 	type args struct {
 		ctx     context.Context
-		cr      *v1alpha2.Request
+		cr      *v1alpha2.AsyncRequest
 		details httpClient.HttpDetails
 		logic   string
 	}
@@ -33,9 +33,9 @@ func Test_CustomCheck(t *testing.T) {
 		"CustomCheckPasses": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body: `{"password": "password"}`,
 							},
@@ -63,9 +63,9 @@ func Test_CustomCheck(t *testing.T) {
 		"CustomCheckFails": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body: `{"password": "password"}`,
 							},

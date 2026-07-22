@@ -16,7 +16,7 @@ limitations under the License.
 
 // Package v1alpha1 contains the v1alpha1 group Sample resources of the http provider.
 // +kubebuilder:object:generate=true
-// +groupName=http.crossplane.io
+// +groupName=http.async.crossplane.io
 // +versionName=v1alpha1
 package v1alpha1
 
@@ -27,7 +27,7 @@ import (
 
 // Package type metadata.
 const (
-	Group   = "http.crossplane.io"
+	Group   = "http.async.crossplane.io"
 	Version = "v1alpha1"
 )
 

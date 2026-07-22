@@ -55,7 +55,7 @@ var (
 )
 
 var (
-	testForProvider = v1alpha2.RequestParameters{
+	testForProvider = v1alpha2.AsyncRequestParameters{
 		Payload: v1alpha2.Payload{
 			Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 			BaseUrl: "https://api.example.com/users",
@@ -69,8 +69,8 @@ var (
 	}
 )
 
-var testCr = &v1alpha2.Request{
-	Spec: v1alpha2.RequestSpec{
+var testCr = &v1alpha2.AsyncRequest{
+	Spec: v1alpha2.AsyncRequestSpec{
 		ForProvider: testForProvider,
 	},
 }
@@ -84,7 +84,7 @@ var testRequest = httpClient.HttpRequest{
 func Test_SetRequestStatus(t *testing.T) {
 	type args struct {
 		localKube      client.Client
-		cr             *v1alpha2.Request
+		cr             *v1alpha2.AsyncRequest
 		requestDetails httpClient.HttpDetails
 		err            error
 		resetFailures  bool

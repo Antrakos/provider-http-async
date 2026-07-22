@@ -19,7 +19,7 @@ import (
 func Test_DefaultIsRemovedCheck(t *testing.T) {
 	type args struct {
 		ctx         context.Context
-		cr          *v1alpha2.Request
+		cr          *v1alpha2.AsyncRequest
 		details     httpClient.HttpDetails
 		responseErr error
 	}
@@ -35,7 +35,7 @@ func Test_DefaultIsRemovedCheck(t *testing.T) {
 		"ValidRemovedState": {
 			args: args{
 				ctx: context.Background(),
-				cr:  &v1alpha2.Request{},
+				cr:  &v1alpha2.AsyncRequest{},
 				details: httpClient.HttpDetails{
 					HttpResponse: httpClient.HttpResponse{
 						Body:       ``,
@@ -52,9 +52,9 @@ func Test_DefaultIsRemovedCheck(t *testing.T) {
 		"RemovedStateWithValidJSON": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 								BaseUrl: "https://api.example.com/users",
@@ -86,7 +86,7 @@ func Test_DefaultIsRemovedCheck(t *testing.T) {
 		"ValidNotRemovedState": {
 			args: args{
 				ctx: context.Background(),
-				cr:  &v1alpha2.Request{},
+				cr:  &v1alpha2.AsyncRequest{},
 				details: httpClient.HttpDetails{
 					HttpResponse: httpClient.HttpResponse{
 						Body:       ``,
@@ -121,7 +121,7 @@ func Test_DefaultIsRemovedCheck(t *testing.T) {
 func Test_CustomIsRemovedCheck(t *testing.T) {
 	type args struct {
 		ctx         context.Context
-		cr          *v1alpha2.Request
+		cr          *v1alpha2.AsyncRequest
 		details     httpClient.HttpDetails
 		responseErr error
 	}
@@ -137,9 +137,9 @@ func Test_CustomIsRemovedCheck(t *testing.T) {
 		"CustomCheckPasses": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body: `{"password": "password"}`,
 							},
@@ -170,9 +170,9 @@ func Test_CustomIsRemovedCheck(t *testing.T) {
 		"CustomCheckFails": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body: `{"password": "password"}`,
 							},
@@ -203,9 +203,9 @@ func Test_CustomIsRemovedCheck(t *testing.T) {
 		"FailedParsing": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body: `{"password": "password"}`,
 							},

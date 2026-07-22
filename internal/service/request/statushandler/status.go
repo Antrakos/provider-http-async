@@ -14,7 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// RequestStatusHandler is the interface to interact with status setting for Request resources
+// RequestStatusHandler is the interface to interact with status setting for AsyncRequest resources
 type RequestStatusHandler interface {
 	SetRequestStatus() error
 	ResetFailures()
@@ -30,8 +30,8 @@ type requestStatusHandler struct {
 	forProvider   interfaces.MappedHTTPRequestSpec
 }
 
-// SetRequestStatus updates the current Request's status to reflect the details of the last HTTP request that occurred.
-// It takes the context, the Request resource, the HTTP response, the mapping configuration, and any error that occurred
+// SetRequestStatus updates the current AsyncRequest's status to reflect the details of the last HTTP request that occurred.
+// It takes the context, the AsyncRequest resource, the HTTP response, the mapping configuration, and any error that occurred
 // during the HTTP request. The function sets the status fields such as StatusCode, Headers, Body, Method, and Cache,
 // based on the outcome of the HTTP request and the presence of an error.
 func (r *requestStatusHandler) SetRequestStatus() error {
@@ -64,7 +64,7 @@ func (r *requestStatusHandler) SetRequestStatus() error {
 	return nil
 }
 
-// setErrorAndReturn sets the error message in the status of the Request.
+// setErrorAndReturn sets the error message in the status of the AsyncRequest.
 func (r *requestStatusHandler) setErrorAndReturn(err error) error {
 	r.svcCtx.Logger.Debug("Error occurred during HTTP request", "error", err)
 	if settingError := utils.SetRequestResourceStatus(*r.resource, r.resource.SetError(err)); settingError != nil {
@@ -74,7 +74,7 @@ func (r *requestStatusHandler) setErrorAndReturn(err error) error {
 	return err
 }
 
-// incrementFailures increments the failures counter and sets the error message in the status of the Request.
+// incrementFailures increments the failures counter and sets the error message in the status of the AsyncRequest.
 func (r *requestStatusHandler) incrementFailures(combinedSetters []utils.SetRequestStatusFunc) error {
 	combinedSetters = append(combinedSetters, r.resource.SetError(nil)) // should increment failures counter
 
@@ -97,7 +97,7 @@ func (r *requestStatusHandler) appendExtraSetters(forProvider interfaces.MappedH
 }
 
 // shouldSetCache determines whether the cache should be updated based on the provided mapping, HTTP response,
-// and RequestParameters. It generates request details according to the given mapping and response. If the request
+// and AsyncRequestParameters. It generates request details according to the given mapping and response. If the request
 // details are not valid, it means that instead of using the response, the cache should be used.
 func (r *requestStatusHandler) shouldSetCache(forProvider interfaces.MappedHTTPRequestSpec) bool {
 	for _, mapping := range forProvider.GetMappings() {
@@ -110,7 +110,7 @@ func (r *requestStatusHandler) shouldSetCache(forProvider interfaces.MappedHTTPR
 	return true
 }
 
-// ResetFailures resets the failures counter in the status of the Request.
+// ResetFailures resets the failures counter in the status of the AsyncRequest.
 func (r *requestStatusHandler) ResetFailures() {
 	if r.extraSetters == nil {
 		r.extraSetters = &[]utils.SetRequestStatusFunc{}
@@ -119,7 +119,7 @@ func (r *requestStatusHandler) ResetFailures() {
 	*r.extraSetters = append(*r.extraSetters, r.resource.ResetFailures())
 }
 
-// NewStatusHandler returns a new Request statusHandler
+// NewStatusHandler returns a new AsyncRequest statusHandler
 func NewStatusHandler(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext, requestDetails httpClient.HttpDetails, requestErr error) (RequestStatusHandler, error) {
 	resource := crCtx.GetCR()
 	forProvider := crCtx.Spec()

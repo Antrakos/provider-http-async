@@ -5,13 +5,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// RequestCRContext wraps a Request CR and provides convenient access to its interfaces.
+// RequestCRContext wraps a AsyncRequest CR and provides convenient access to its interfaces.
 // This reduces parameter counts by bundling spec, status, and cached response accessors.
 type RequestCRContext struct {
 	cr interfaces.RequestResource
 }
 
-// NewRequestCRContext creates a new context for a Request custom resource.
+// NewRequestCRContext creates a new context for a AsyncRequest custom resource.
 func NewRequestCRContext(cr interfaces.RequestResource) *RequestCRContext {
 	return &RequestCRContext{cr: cr}
 }

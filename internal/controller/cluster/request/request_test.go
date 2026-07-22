@@ -55,7 +55,7 @@ var (
 )
 
 var (
-	testForProvider = v1alpha2.RequestParameters{
+	testForProvider = v1alpha2.AsyncRequestParameters{
 		Payload: v1alpha2.Payload{
 			Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 			BaseUrl: "https://api.example.com/users",
@@ -69,15 +69,15 @@ var (
 	}
 )
 
-type httpRequestModifier func(request *v1alpha2.Request)
+type httpRequestModifier func(request *v1alpha2.AsyncRequest)
 
-func httpRequest(rm ...httpRequestModifier) *v1alpha2.Request {
-	r := &v1alpha2.Request{
+func httpRequest(rm ...httpRequestModifier) *v1alpha2.AsyncRequest {
+	r := &v1alpha2.AsyncRequest{
 		ObjectMeta: v1.ObjectMeta{
 			Name:      testRequestName,
 			Namespace: testNamespace,
 		},
-		Spec: v1alpha2.RequestSpec{
+		Spec: v1alpha2.AsyncRequestSpec{
 			ClusterManagedResourceSpec: xpv2.ClusterManagedResourceSpec{
 				ProviderConfigReference: &xpv2.Reference{
 					Name: providerName,
@@ -85,7 +85,7 @@ func httpRequest(rm ...httpRequestModifier) *v1alpha2.Request {
 			},
 			ForProvider: testForProvider,
 		},
-		Status: v1alpha2.RequestStatus{
+		Status: v1alpha2.AsyncRequestStatus{
 			Response: v1alpha2.Response{
 				Body:       `{"id": "123"}`,
 				StatusCode: 200,
@@ -129,7 +129,7 @@ type MockSetRequestStatusFn func() error
 
 type MockResetFailuresFn func()
 
-type MockInitFn func(ctx context.Context, cr *v1alpha2.Request, res httpClient.HttpResponse)
+type MockInitFn func(ctx context.Context, cr *v1alpha2.AsyncRequest, res httpClient.HttpResponse)
 
 type MockStatusHandler struct {
 	MockSetRequest    MockSetRequestStatusFn
@@ -140,7 +140,7 @@ func (s *MockStatusHandler) ResetFailures() {
 	s.MockResetFailures()
 }
 
-func (s *MockStatusHandler) SetRequestStatus(ctx context.Context, cr *v1alpha2.Request, res httpClient.HttpResponse, err error) error {
+func (s *MockStatusHandler) SetRequestStatus(ctx context.Context, cr *v1alpha2.AsyncRequest, res httpClient.HttpResponse, err error) error {
 	return s.MockSetRequest()
 }
 
@@ -423,9 +423,9 @@ func Test_httpExternal_Observe(t *testing.T) {
 					MockGet:          test.NewMockGetFn(nil),
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
-				mg: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				mg: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								BaseUrl: "https://api.example.com/users/123",
 							},
@@ -437,7 +437,7 @@ func Test_httpExternal_Observe(t *testing.T) {
 							},
 						},
 					},
-					Status: v1alpha2.RequestStatus{
+					Status: v1alpha2.AsyncRequestStatus{
 						Response: v1alpha2.Response{
 							StatusCode: 200,
 							Body:       `{"id": "123"}`,
@@ -513,12 +513,12 @@ func TestManagementPoliciesFeatureFlag(t *testing.T) {
 func TestRequestManagementPolicies(t *testing.T) {
 	cases := map[string]struct {
 		reason string
-		mg     *v1alpha2.Request
+		mg     *v1alpha2.AsyncRequest
 		want   xpv2.ManagementPolicies
 	}{
 		"DefaultManagementPolicies": {
 			reason: "Default management policies should be nil when not explicitly set",
-			mg: func() *v1alpha2.Request {
+			mg: func() *v1alpha2.AsyncRequest {
 				r := httpRequest()
 				// Don't set managementPolicies explicitly to test default
 				return r
@@ -527,7 +527,7 @@ func TestRequestManagementPolicies(t *testing.T) {
 		},
 		"ObserveOnlyManagementPolicies": {
 			reason: "Observe-only management policies should only allow observation",
-			mg: func() *v1alpha2.Request {
+			mg: func() *v1alpha2.AsyncRequest {
 				r := httpRequest()
 				r.Spec.ManagementPolicies = xpv2.ManagementPolicies{xpv2.ManagementActionObserve}
 				return r
@@ -536,7 +536,7 @@ func TestRequestManagementPolicies(t *testing.T) {
 		},
 		"CreateAndUpdateManagementPolicies": {
 			reason: "Create and update management policies should allow creation and updates",
-			mg: func() *v1alpha2.Request {
+			mg: func() *v1alpha2.AsyncRequest {
 				r := httpRequest()
 				r.Spec.ManagementPolicies = xpv2.ManagementPolicies{
 					xpv2.ManagementActionCreate,
@@ -551,7 +551,7 @@ func TestRequestManagementPolicies(t *testing.T) {
 		},
 		"ObserveCreateUpdateManagementPolicies": {
 			reason: "Observe, create, and update management policies should allow all three actions",
-			mg: func() *v1alpha2.Request {
+			mg: func() *v1alpha2.AsyncRequest {
 				r := httpRequest()
 				r.Spec.ManagementPolicies = xpv2.ManagementPolicies{
 					xpv2.ManagementActionObserve,
@@ -568,7 +568,7 @@ func TestRequestManagementPolicies(t *testing.T) {
 		},
 		"AllActionsExceptDeleteManagementPolicies": {
 			reason: "All actions except delete should allow observe, create, update, and late initialize",
-			mg: func() *v1alpha2.Request {
+			mg: func() *v1alpha2.AsyncRequest {
 				r := httpRequest()
 				r.Spec.ManagementPolicies = xpv2.ManagementPolicies{
 					xpv2.ManagementActionObserve,
@@ -587,7 +587,7 @@ func TestRequestManagementPolicies(t *testing.T) {
 		},
 		"ExplicitAllManagementPolicies": {
 			reason: "Explicit all management policies should allow all actions",
-			mg: func() *v1alpha2.Request {
+			mg: func() *v1alpha2.AsyncRequest {
 				r := httpRequest()
 				r.Spec.ManagementPolicies = xpv2.ManagementPolicies{xpv2.ManagementActionAll}
 				return r
@@ -820,9 +820,9 @@ func TestRequestManagementPoliciesResolver(t *testing.T) {
 	}
 }
 
-func httpRequestWithDeletion() *v1alpha2.Request {
+func httpRequestWithDeletion() *v1alpha2.AsyncRequest {
 	now := v1.Now()
-	return httpRequest(func(r *v1alpha2.Request) {
+	return httpRequest(func(r *v1alpha2.AsyncRequest) {
 		r.DeletionTimestamp = &now
 	})
 }
@@ -932,9 +932,9 @@ func TestTLSConfiguration(t *testing.T) {
 	}
 }
 
-// clusterRequestWithTLS creates a Request with TLS configuration
-func clusterRequestWithTLS() *v1alpha2.Request {
-	return httpRequest(func(cr *v1alpha2.Request) {
+// clusterRequestWithTLS creates a AsyncRequest with TLS configuration
+func clusterRequestWithTLS() *v1alpha2.AsyncRequest {
+	return httpRequest(func(cr *v1alpha2.AsyncRequest) {
 		cr.Spec.ForProvider.TLSConfig = &common.TLSConfig{
 			CACertSecretRef: &xpv2.SecretKeySelector{
 				SecretReference: xpv2.SecretReference{
@@ -947,16 +947,16 @@ func clusterRequestWithTLS() *v1alpha2.Request {
 	})
 }
 
-// clusterRequestWithInsecureSkipTLS creates a Request with insecureSkipTLSVerify
-func clusterRequestWithInsecureSkipTLS() *v1alpha2.Request {
-	return httpRequest(func(cr *v1alpha2.Request) {
+// clusterRequestWithInsecureSkipTLS creates a AsyncRequest with insecureSkipTLSVerify
+func clusterRequestWithInsecureSkipTLS() *v1alpha2.AsyncRequest {
+	return httpRequest(func(cr *v1alpha2.AsyncRequest) {
 		cr.Spec.ForProvider.InsecureSkipTLSVerify = true
 	})
 }
 
-// clusterRequestWithMutualTLS creates a Request with mutual TLS configuration
-func clusterRequestWithMutualTLS() *v1alpha2.Request {
-	return httpRequest(func(cr *v1alpha2.Request) {
+// clusterRequestWithMutualTLS creates a AsyncRequest with mutual TLS configuration
+func clusterRequestWithMutualTLS() *v1alpha2.AsyncRequest {
+	return httpRequest(func(cr *v1alpha2.AsyncRequest) {
 		cr.Spec.ForProvider.TLSConfig = &common.TLSConfig{
 			CACertSecretRef: &xpv2.SecretKeySelector{
 				SecretReference: xpv2.SecretReference{

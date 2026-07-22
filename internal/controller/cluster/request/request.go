@@ -46,7 +46,7 @@ import (
 )
 
 const (
-	errNotRequest              = "managed resource is not a Request custom resource"
+	errNotRequest              = "managed resource is not a AsyncRequest custom resource"
 	errTrackPCUsage            = "cannot track ProviderConfig usage"
 	errNewHttpClient           = "cannot create new Http client"
 	errProviderNotRetrieved    = "provider could not be retrieved"
@@ -56,7 +56,7 @@ const (
 	errExtractCredentials      = "cannot extract credentials"
 )
 
-// Setup adds a controller that reconciles Request managed resources.
+// Setup adds a controller that reconciles AsyncRequest managed resources.
 func Setup(mgr ctrl.Manager, o controller.Options, timeout time.Duration) error {
 	name := managed.ControllerName(v1alpha2.RequestGroupKind)
 
@@ -86,7 +86,7 @@ func Setup(mgr ctrl.Manager, o controller.Options, timeout time.Duration) error 
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
 		WithEventFilter(resource.DesiredStateChanged()).
-		For(&v1alpha2.Request{}).
+		For(&v1alpha2.AsyncRequest{}).
 		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
 }
 
@@ -103,7 +103,7 @@ type connector struct {
 //
 //gocyclo:ignore
 func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
-	cr, ok := mg.(*v1alpha2.Request)
+	cr, ok := mg.(*v1alpha2.AsyncRequest)
 	if !ok {
 		return nil, errors.New(errNotRequest)
 	}
@@ -146,7 +146,7 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	// Merge TLS configs: resource-level overrides provider-level
 	mergedTLSConfig := httpClient.MergeTLSConfigs(cr.Spec.ForProvider.TLSConfig, pc.Spec.TLS)
 
-	// Apply InsecureSkipTLSVerify from Request spec if set
+	// Apply InsecureSkipTLSVerify from AsyncRequest spec if set
 	if cr.Spec.ForProvider.InsecureSkipTLSVerify {
 		if mergedTLSConfig == nil {
 			mergedTLSConfig = &common.TLSConfig{}
@@ -178,7 +178,7 @@ type external struct {
 }
 
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
-	cr, ok := mg.(*v1alpha2.Request)
+	cr, ok := mg.(*v1alpha2.AsyncRequest)
 	if !ok {
 		return managed.ExternalObservation{}, errors.New(errNotRequest)
 	}
@@ -220,7 +220,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 }
 
 func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.ExternalCreation, error) {
-	cr, ok := mg.(*v1alpha2.Request)
+	cr, ok := mg.(*v1alpha2.AsyncRequest)
 	if !ok {
 		return managed.ExternalCreation{}, errors.New(errNotRequest)
 	}
@@ -236,7 +236,7 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 }
 
 func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
-	cr, ok := mg.(*v1alpha2.Request)
+	cr, ok := mg.(*v1alpha2.AsyncRequest)
 	if !ok {
 		return managed.ExternalUpdate{}, errors.New(errNotRequest)
 	}
@@ -252,7 +252,7 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 }
 
 func (c *external) Delete(ctx context.Context, mg resource.Managed) (managed.ExternalDelete, error) {
-	cr, ok := mg.(*v1alpha2.Request)
+	cr, ok := mg.(*v1alpha2.AsyncRequest)
 	if !ok {
 		return managed.ExternalDelete{}, errors.New(errNotRequest)
 	}

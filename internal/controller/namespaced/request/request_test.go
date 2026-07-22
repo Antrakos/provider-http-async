@@ -55,7 +55,7 @@ var (
 )
 
 var (
-	testForProvider = v1alpha2.RequestParameters{
+	testForProvider = v1alpha2.AsyncRequestParameters{
 		Payload: v1alpha2.Payload{
 			Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 			BaseUrl: "https://api.example.com/users",
@@ -90,18 +90,18 @@ func (m *MockHttpClient) SendRequestWithTLS(ctx context.Context, method string, 
 	return m.MockSendRequest(ctx, method, url, body, headers, tlsConfig)
 }
 
-type httpNamespacedRequestModifier func(request *v1alpha2.Request)
+type httpNamespacedRequestModifier func(request *v1alpha2.AsyncRequest)
 
-func httpNamespacedRequest(rm ...httpNamespacedRequestModifier) *v1alpha2.Request {
-	r := &v1alpha2.Request{
+func httpNamespacedRequest(rm ...httpNamespacedRequestModifier) *v1alpha2.AsyncRequest {
+	r := &v1alpha2.AsyncRequest{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      testNamespacedRequestName,
 			Namespace: testNamespace,
 		},
-		Spec: v1alpha2.RequestSpec{
+		Spec: v1alpha2.AsyncRequestSpec{
 			ForProvider: testForProvider,
 		},
-		Status: v1alpha2.RequestStatus{
+		Status: v1alpha2.AsyncRequestStatus{
 			Response: v1alpha2.Response{
 				Body:       `{"id": "123"}`,
 				StatusCode: 200,
@@ -120,14 +120,14 @@ type notNamespacedRequest struct {
 	resource.Managed
 }
 
-func namespacedRequest(modifiers ...func(*v1alpha2.Request)) *v1alpha2.Request {
-	cr := &v1alpha2.Request{
+func namespacedRequest(modifiers ...func(*v1alpha2.AsyncRequest)) *v1alpha2.AsyncRequest {
+	cr := &v1alpha2.AsyncRequest{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-request",
 			Namespace: "default",
 		},
-		Spec: v1alpha2.RequestSpec{
-			ForProvider: v1alpha2.RequestParameters{
+		Spec: v1alpha2.AsyncRequestSpec{
+			ForProvider: v1alpha2.AsyncRequestParameters{
 				Payload: v1alpha2.Payload{
 					Body:    `{"test": true}`,
 					BaseUrl: "http://example.com/test",
@@ -156,9 +156,9 @@ func namespacedRequest(modifiers ...func(*v1alpha2.Request)) *v1alpha2.Request {
 	return cr
 }
 
-func namespacedRequestWithDeletion() *v1alpha2.Request {
+func namespacedRequestWithDeletion() *v1alpha2.AsyncRequest {
 	now := metav1.Now()
-	return namespacedRequest(func(cr *v1alpha2.Request) {
+	return namespacedRequest(func(cr *v1alpha2.AsyncRequest) {
 		cr.DeletionTimestamp = &now
 	})
 }
@@ -501,12 +501,12 @@ func TestManagementPoliciesFeatureFlag(t *testing.T) {
 func TestNamespacedRequestManagementPolicies(t *testing.T) {
 	cases := map[string]struct {
 		reason string
-		mg     *v1alpha2.Request
+		mg     *v1alpha2.AsyncRequest
 		want   xpv2.ManagementPolicies
 	}{
 		"DefaultManagementPolicies": {
 			reason: "Default management policies should be nil when not explicitly set",
-			mg: func() *v1alpha2.Request {
+			mg: func() *v1alpha2.AsyncRequest {
 				r := httpNamespacedRequest()
 				// Don't set managementPolicies explicitly to test default
 				return r
@@ -515,7 +515,7 @@ func TestNamespacedRequestManagementPolicies(t *testing.T) {
 		},
 		"ObserveOnlyManagementPolicies": {
 			reason: "Observe-only management policies should only allow observation",
-			mg: func() *v1alpha2.Request {
+			mg: func() *v1alpha2.AsyncRequest {
 				r := httpNamespacedRequest()
 				r.Spec.ManagementPolicies = xpv2.ManagementPolicies{xpv2.ManagementActionObserve}
 				return r
@@ -524,7 +524,7 @@ func TestNamespacedRequestManagementPolicies(t *testing.T) {
 		},
 		"CreateAndUpdateManagementPolicies": {
 			reason: "Create and update management policies should allow creation and updates",
-			mg: func() *v1alpha2.Request {
+			mg: func() *v1alpha2.AsyncRequest {
 				r := httpNamespacedRequest()
 				r.Spec.ManagementPolicies = xpv2.ManagementPolicies{
 					xpv2.ManagementActionCreate,
@@ -539,7 +539,7 @@ func TestNamespacedRequestManagementPolicies(t *testing.T) {
 		},
 		"ObserveCreateUpdateManagementPolicies": {
 			reason: "Observe, create, and update management policies should allow all three actions",
-			mg: func() *v1alpha2.Request {
+			mg: func() *v1alpha2.AsyncRequest {
 				r := httpNamespacedRequest()
 				r.Spec.ManagementPolicies = xpv2.ManagementPolicies{
 					xpv2.ManagementActionObserve,
@@ -556,7 +556,7 @@ func TestNamespacedRequestManagementPolicies(t *testing.T) {
 		},
 		"AllActionsExceptDeleteManagementPolicies": {
 			reason: "All actions except delete should allow observe, create, update, and late initialize",
-			mg: func() *v1alpha2.Request {
+			mg: func() *v1alpha2.AsyncRequest {
 				r := httpNamespacedRequest()
 				r.Spec.ManagementPolicies = xpv2.ManagementPolicies{
 					xpv2.ManagementActionObserve,
@@ -575,7 +575,7 @@ func TestNamespacedRequestManagementPolicies(t *testing.T) {
 		},
 		"ExplicitAllManagementPolicies": {
 			reason: "Explicit all management policies should allow all actions",
-			mg: func() *v1alpha2.Request {
+			mg: func() *v1alpha2.AsyncRequest {
 				r := httpNamespacedRequest()
 				r.Spec.ManagementPolicies = xpv2.ManagementPolicies{xpv2.ManagementActionAll}
 				return r
@@ -808,9 +808,9 @@ func TestNamespacedRequestManagementPoliciesResolver(t *testing.T) {
 	}
 }
 
-func httpNamespacedRequestWithDeletion() *v1alpha2.Request {
+func httpNamespacedRequestWithDeletion() *v1alpha2.AsyncRequest {
 	now := metav1.Now()
-	return httpNamespacedRequest(func(r *v1alpha2.Request) {
+	return httpNamespacedRequest(func(r *v1alpha2.AsyncRequest) {
 		r.DeletionTimestamp = &now
 	})
 }
@@ -920,9 +920,9 @@ func TestTLSConfiguration(t *testing.T) {
 	}
 }
 
-// namespacedRequestWithTLS creates a Request with TLS configuration
-func namespacedRequestWithTLS() *v1alpha2.Request {
-	return namespacedRequest(func(cr *v1alpha2.Request) {
+// namespacedRequestWithTLS creates a AsyncRequest with TLS configuration
+func namespacedRequestWithTLS() *v1alpha2.AsyncRequest {
+	return namespacedRequest(func(cr *v1alpha2.AsyncRequest) {
 		cr.Spec.ForProvider.TLSConfig = &common.TLSConfig{
 			CACertSecretRef: &xpv2.SecretKeySelector{
 				SecretReference: xpv2.SecretReference{
@@ -935,16 +935,16 @@ func namespacedRequestWithTLS() *v1alpha2.Request {
 	})
 }
 
-// namespacedRequestWithInsecureSkipTLS creates a Request with insecureSkipTLSVerify
-func namespacedRequestWithInsecureSkipTLS() *v1alpha2.Request {
-	return namespacedRequest(func(cr *v1alpha2.Request) {
+// namespacedRequestWithInsecureSkipTLS creates a AsyncRequest with insecureSkipTLSVerify
+func namespacedRequestWithInsecureSkipTLS() *v1alpha2.AsyncRequest {
+	return namespacedRequest(func(cr *v1alpha2.AsyncRequest) {
 		cr.Spec.ForProvider.InsecureSkipTLSVerify = true
 	})
 }
 
-// namespacedRequestWithMutualTLS creates a Request with mutual TLS configuration
-func namespacedRequestWithMutualTLS() *v1alpha2.Request {
-	return namespacedRequest(func(cr *v1alpha2.Request) {
+// namespacedRequestWithMutualTLS creates a AsyncRequest with mutual TLS configuration
+func namespacedRequestWithMutualTLS() *v1alpha2.AsyncRequest {
+	return namespacedRequest(func(cr *v1alpha2.AsyncRequest) {
 		cr.Spec.ForProvider.TLSConfig = &common.TLSConfig{
 			CACertSecretRef: &xpv2.SecretKeySelector{
 				SecretReference: xpv2.SecretReference{

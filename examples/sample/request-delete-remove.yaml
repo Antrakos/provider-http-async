@@ -1,5 +1,5 @@
-apiVersion: http.crossplane.io/v1alpha2
-kind: Request
+apiVersion: http.async.crossplane.io/v1alpha2
+kind: AsyncRequest
 metadata:
   name: manage-user-delete-remove-e2e-sample
   annotations:

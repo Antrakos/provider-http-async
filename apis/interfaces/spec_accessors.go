@@ -24,7 +24,7 @@ import (
 )
 
 // HTTPRequestSpec defines the common interface for accessing HTTP request configuration.
-// This interface abstracts the differences between Request and DisposableRequest types.
+// This interface abstracts the differences between AsyncRequest and DisposableRequest types.
 type HTTPRequestSpec interface {
 	// GetWaitTimeout returns the maximum time duration for waiting.
 	GetWaitTimeout() *metav1.Duration
@@ -60,7 +60,7 @@ type SimpleHTTPRequestSpec interface {
 	GetAllowedStatusCodes() []int
 }
 
-// MappedHTTPRequestSpec defines the interface for requests with multiple mappings (like Request).
+// MappedHTTPRequestSpec defines the interface for requests with multiple mappings (like AsyncRequest).
 // These requests can have different URLs and methods for different actions.
 type MappedHTTPRequestSpec interface {
 	HTTPRequestSpec
@@ -172,7 +172,7 @@ type DisposableRequestStatusReader interface {
 	GetResponse() HTTPResponse
 }
 
-// BaseStatusWriter provides common status modification methods shared by both Request and DisposableRequest.
+// BaseStatusWriter provides common status modification methods shared by both AsyncRequest and DisposableRequest.
 // This interface defines the core status update operations that all resources support.
 type BaseStatusWriter interface {
 	// SetStatusCode sets the HTTP status code.
@@ -211,7 +211,7 @@ type DisposableRequestStatus interface {
 	DisposableRequestStatusWriter
 }
 
-// RequestStatusReader provides read-only access to Request status fields.
+// RequestStatusReader provides read-only access to AsyncRequest status fields.
 type RequestStatusReader interface {
 	// GetResponse returns the HTTP response.
 	GetResponse() HTTPResponse
@@ -223,7 +223,7 @@ type RequestStatusReader interface {
 	GetRequestDetails() HTTPMapping
 }
 
-// RequestStatusWriter provides write access to Request status fields.
+// RequestStatusWriter provides write access to AsyncRequest status fields.
 type RequestStatusWriter interface {
 	BaseStatusWriter
 
@@ -234,15 +234,15 @@ type RequestStatusWriter interface {
 	ResetFailures()
 }
 
-// RequestStatus combines read and write access to Request status.
-type RequestStatus interface {
+// AsyncRequestStatus combines read and write access to AsyncRequest status.
+type AsyncRequestStatus interface {
 	RequestStatusReader
 	RequestStatusWriter
 	CachedResponse
 }
 
-// RequestResource represents a complete Request resource with both spec and status.
-// This interface is implemented by Request types and provides access to both configuration and state.
+// RequestResource represents a complete AsyncRequest resource with both spec and status.
+// This interface is implemented by AsyncRequest types and provides access to both configuration and state.
 type RequestResource interface {
 	// Embed client.Object for Kubernetes object access (includes metav1.Object and runtime.Object)
 	client.Object

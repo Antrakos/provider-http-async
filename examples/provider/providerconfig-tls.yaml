@@ -1,7 +1,7 @@
 ---
 # Example ProviderConfig with TLS CA certificate verification
 # This configuration uses a custom CA bundle to verify HTTPS server certificates
-apiVersion: http.crossplane.io/v1alpha1
+apiVersion: http.async.crossplane.io/v1alpha1
 kind: ProviderConfig
 metadata:
   name: example-with-tls
@@ -17,7 +17,7 @@ spec:
 ---
 # Example ProviderConfig with mTLS (mutual TLS authentication)
 # This configuration provides both CA bundle and client certificates
-apiVersion: http.crossplane.io/v1alpha1
+apiVersion: http.async.crossplane.io/v1alpha1
 kind: ProviderConfig
 metadata:
   name: example-with-mtls
@@ -43,7 +43,7 @@ spec:
 ---
 # Example ProviderConfig with insecureSkipVerify (not recommended for production)
 # Use only for testing with self-signed certificates
-apiVersion: http.crossplane.io/v1alpha1
+apiVersion: http.async.crossplane.io/v1alpha1
 kind: ProviderConfig
 metadata:
   name: example-insecure

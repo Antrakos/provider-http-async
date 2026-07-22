@@ -52,7 +52,7 @@ var (
 )
 
 var (
-	testForProvider = v1alpha2.RequestParameters{
+	testForProvider = v1alpha2.AsyncRequestParameters{
 		Payload: v1alpha2.Payload{
 			Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 			BaseUrl: "https://api.example.com/users",
@@ -77,7 +77,7 @@ var (
 func Test_GenerateRequestDetails(t *testing.T) {
 	type args struct {
 		methodMapping v1alpha2.Mapping
-		forProvider   v1alpha2.RequestParameters
+		forProvider   v1alpha2.AsyncRequestParameters
 		response      v1alpha2.Response
 		logger        logging.Logger
 		localKube     client.Client
@@ -314,7 +314,7 @@ func Test_IsRequestValid(t *testing.T) {
 func Test_coalesceHeaders(t *testing.T) {
 	type args struct {
 		mapping v1alpha2.Mapping
-		spec    v1alpha2.RequestParameters
+		spec    v1alpha2.AsyncRequestParameters
 	}
 	type want struct {
 		headers map[string][]string
@@ -326,7 +326,7 @@ func Test_coalesceHeaders(t *testing.T) {
 		"NonNilMappingHeaders": {
 			args: args{
 				mapping: v1alpha2.Mapping{Headers: testHeaders},
-				spec:    v1alpha2.RequestParameters{Headers: testHeaders2},
+				spec:    v1alpha2.AsyncRequestParameters{Headers: testHeaders2},
 			},
 			want: want{
 				headers: testHeaders,
@@ -335,7 +335,7 @@ func Test_coalesceHeaders(t *testing.T) {
 		"NilMappingHeaders": {
 			args: args{
 				mapping: v1alpha2.Mapping{Headers: nil},
-				spec:    v1alpha2.RequestParameters{Headers: testHeaders2},
+				spec:    v1alpha2.AsyncRequestParameters{Headers: testHeaders2},
 			},
 			want: want{
 				headers: testHeaders2,
@@ -344,7 +344,7 @@ func Test_coalesceHeaders(t *testing.T) {
 		"NilDefaultHeaders": {
 			args: args{
 				mapping: v1alpha2.Mapping{Headers: testHeaders},
-				spec:    v1alpha2.RequestParameters{Headers: nil},
+				spec:    v1alpha2.AsyncRequestParameters{Headers: nil},
 			},
 			want: want{
 				headers: testHeaders,
@@ -353,7 +353,7 @@ func Test_coalesceHeaders(t *testing.T) {
 		"NilHeaders": {
 			args: args{
 				mapping: v1alpha2.Mapping{Headers: nil},
-				spec:    v1alpha2.RequestParameters{Headers: nil},
+				spec:    v1alpha2.AsyncRequestParameters{Headers: nil},
 			},
 			want: want{
 				headers: nil,
@@ -373,7 +373,7 @@ func Test_coalesceHeaders(t *testing.T) {
 
 func Test_generateRequestObject(t *testing.T) {
 	type args struct {
-		forProvider v1alpha2.RequestParameters
+		forProvider v1alpha2.AsyncRequestParameters
 		response    v1alpha2.Response
 	}
 	type want struct {

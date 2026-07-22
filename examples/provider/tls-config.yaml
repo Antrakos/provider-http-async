@@ -1,6 +1,6 @@
 ---
 # Example: ProviderConfig with TLS certificate authentication using secrets
-apiVersion: http.crossplane.io/v1alpha1
+apiVersion: http.async.crossplane.io/v1alpha1
 kind: ProviderConfig
 metadata:
   name: provider-http-tls
@@ -23,7 +23,7 @@ spec:
     insecureSkipVerify: false
 ---
 # Example: ProviderConfig with just CA certificates (no client certs)
-apiVersion: http.crossplane.io/v1alpha1
+apiVersion: http.async.crossplane.io/v1alpha1
 kind: ProviderConfig
 metadata:
   name: provider-http-ca-only

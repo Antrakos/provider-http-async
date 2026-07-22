@@ -41,7 +41,7 @@ var (
 func Test_DefaultIsUpToDateCheck(t *testing.T) {
 	type args struct {
 		ctx         context.Context
-		cr          *v1alpha2.Request
+		cr          *v1alpha2.AsyncRequest
 		details     httpClient.HttpDetails
 		responseErr error
 	}
@@ -58,7 +58,7 @@ func Test_DefaultIsUpToDateCheck(t *testing.T) {
 		"ValidJSONSyncedState": {
 			args: args{
 				ctx: context.Background(),
-				cr:  &v1alpha2.Request{},
+				cr:  &v1alpha2.AsyncRequest{},
 				details: httpClient.HttpDetails{
 					HttpResponse: httpClient.HttpResponse{
 						Body:       ``,
@@ -76,9 +76,9 @@ func Test_DefaultIsUpToDateCheck(t *testing.T) {
 		"UnsyncedStateWithValidJSON": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 								BaseUrl: "https://api.example.com/users",
@@ -94,7 +94,7 @@ func Test_DefaultIsUpToDateCheck(t *testing.T) {
 							},
 						},
 					},
-					Status: v1alpha2.RequestStatus{
+					Status: v1alpha2.AsyncRequestStatus{
 						Response: v1alpha2.Response{
 							Body:       `{"id": "123"}`,
 							StatusCode: 200,
@@ -117,9 +117,9 @@ func Test_DefaultIsUpToDateCheck(t *testing.T) {
 		"InvalidResponseJSON": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 								BaseUrl: "https://api.example.com/users",
@@ -135,7 +135,7 @@ func Test_DefaultIsUpToDateCheck(t *testing.T) {
 							},
 						},
 					},
-					Status: v1alpha2.RequestStatus{
+					Status: v1alpha2.AsyncRequestStatus{
 						Response: v1alpha2.Response{
 							Body:       `{"id": "123"}`,
 							StatusCode: 200,
@@ -180,7 +180,7 @@ func Test_DefaultIsUpToDateCheck(t *testing.T) {
 func Test_CustomIsUpToDateCheck(t *testing.T) {
 	type args struct {
 		ctx         context.Context
-		cr          *v1alpha2.Request
+		cr          *v1alpha2.AsyncRequest
 		details     httpClient.HttpDetails
 		responseErr error
 	}
@@ -197,9 +197,9 @@ func Test_CustomIsUpToDateCheck(t *testing.T) {
 		"CustomCheckPasses": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body: `{"password": "password"}`,
 							},
@@ -227,9 +227,9 @@ func Test_CustomIsUpToDateCheck(t *testing.T) {
 		"CustomCheckFails": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body: `{"password": "password"}`,
 							},

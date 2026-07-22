@@ -41,7 +41,7 @@ var (
 )
 
 var (
-	testRequestForProvider = v1alpha1_request.RequestParameters{
+	testRequestForProvider = v1alpha1_request.AsyncRequestParameters{
 		Payload: v1alpha1_request.Payload{
 			Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 			BaseUrl: "https://api.example.com/users",
@@ -54,11 +54,11 @@ var (
 		},
 	}
 
-	testRequestCr = &v1alpha1_request.Request{
-		Spec: v1alpha1_request.RequestSpec{
+	testRequestCr = &v1alpha1_request.AsyncRequest{
+		Spec: v1alpha1_request.AsyncRequestSpec{
 			ForProvider: testRequestForProvider,
 		},
-		Status: v1alpha1_request.RequestStatus{
+		Status: v1alpha1_request.AsyncRequestStatus{
 			Failed: int32(3),
 		},
 	}

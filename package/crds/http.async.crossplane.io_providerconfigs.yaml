@@ -4,14 +4,14 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: clusterproviderconfigs.http.m.crossplane.io
+  name: providerconfigs.http.async.crossplane.io
 spec:
-  group: http.m.crossplane.io
+  group: http.async.crossplane.io
   names:
-    kind: ClusterProviderConfig
-    listKind: ClusterProviderConfigList
-    plural: clusterproviderconfigs
-    singular: clusterproviderconfig
+    kind: ProviderConfig
+    listKind: ProviderConfigList
+    plural: providerconfigs
+    singular: providerconfig
   scope: Cluster
   versions:
   - additionalPrinterColumns:
@@ -22,11 +22,10 @@ spec:
       name: SECRET-NAME
       priority: 1
       type: string
-    name: v1alpha2
+    name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: A ClusterProviderConfig configures a Http provider at the cluster
-          level for cross-namespace access.
+        description: A ProviderConfig configures a Http provider.
         properties:
           apiVersion:
             description: |-

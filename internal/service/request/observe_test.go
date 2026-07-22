@@ -31,7 +31,7 @@ var (
 )
 
 var (
-	testForProvider = v1alpha2.RequestParameters{
+	testForProvider = v1alpha2.AsyncRequestParameters{
 		Payload: v1alpha2.Payload{
 			Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 			BaseUrl: "https://api.example.com/users",
@@ -69,15 +69,15 @@ var (
 	}
 )
 
-type httpRequestModifier func(request *v1alpha2.Request)
+type httpRequestModifier func(request *v1alpha2.AsyncRequest)
 
-func httpRequest(rm ...httpRequestModifier) *v1alpha2.Request {
-	r := &v1alpha2.Request{
+func httpRequest(rm ...httpRequestModifier) *v1alpha2.AsyncRequest {
+	r := &v1alpha2.AsyncRequest{
 		ObjectMeta: v1.ObjectMeta{
 			Name:      testRequestName,
 			Namespace: testNamespace,
 		},
-		Spec: v1alpha2.RequestSpec{
+		Spec: v1alpha2.AsyncRequestSpec{
 			ClusterManagedResourceSpec: xpv2.ClusterManagedResourceSpec{
 				ProviderConfigReference: &xpv2.Reference{
 					Name: providerName,
@@ -85,7 +85,7 @@ func httpRequest(rm ...httpRequestModifier) *v1alpha2.Request {
 			},
 			ForProvider: testForProvider,
 		},
-		Status: v1alpha2.RequestStatus{},
+		Status: v1alpha2.AsyncRequestStatus{},
 	}
 
 	for _, m := range rm {
@@ -109,7 +109,7 @@ func Test_isUpToDate(t *testing.T) {
 	type args struct {
 		http      httpClient.Client
 		localKube client.Client
-		mg        *v1alpha2.Request
+		mg        *v1alpha2.AsyncRequest
 	}
 	type want struct {
 		result ObserveRequestDetails
@@ -135,7 +135,7 @@ func Test_isUpToDate(t *testing.T) {
 				localKube: &test.MockClient{
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
-				mg: httpRequest(func(r *v1alpha2.Request) {
+				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
 					r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
 						{
 							Method: "GET",
@@ -167,7 +167,7 @@ func Test_isUpToDate(t *testing.T) {
 				localKube: &test.MockClient{
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
-				mg: httpRequest(func(r *v1alpha2.Request) {
+				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
 					r.Status.Response.Body = ""
 					r.Status.Response.StatusCode = 0
 				}),
@@ -186,7 +186,7 @@ func Test_isUpToDate(t *testing.T) {
 				localKube: &test.MockClient{
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
-				mg: httpRequest(func(r *v1alpha2.Request) {
+				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
 					r.Status.RequestDetails.Method = http.MethodPost
 					r.Status.Response.StatusCode = 400
 				}),
@@ -210,7 +210,7 @@ func Test_isUpToDate(t *testing.T) {
 				localKube: &test.MockClient{
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
-				mg: httpRequest(func(r *v1alpha2.Request) {
+				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
 					r.Status.Response.StatusCode = http.StatusNotFound
 				}),
 			},
@@ -232,7 +232,7 @@ func Test_isUpToDate(t *testing.T) {
 				localKube: &test.MockClient{
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
-				mg: httpRequest(func(r *v1alpha2.Request) {
+				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
 					r.Status.Response.Body = `{"username":"john_doe_new_username"}`
 					r.Status.Response.StatusCode = http.StatusOK
 				}),
@@ -256,7 +256,7 @@ func Test_isUpToDate(t *testing.T) {
 				localKube: &test.MockClient{
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
-				mg: httpRequest(func(r *v1alpha2.Request) {
+				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
 					r.Status.Response.Body = `{"username":"john_doe_new_username"}`
 					r.Status.Response.StatusCode = http.StatusOK
 				}),
@@ -291,7 +291,7 @@ func Test_isUpToDate(t *testing.T) {
 				localKube: &test.MockClient{
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
-				mg: httpRequest(func(r *v1alpha2.Request) {
+				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
 					r.Status.Response.Body = `{"username":"john_doe_new_username"}`
 					r.Status.Response.StatusCode = 200
 					r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
@@ -331,7 +331,7 @@ func Test_isUpToDate(t *testing.T) {
 				localKube: &test.MockClient{
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
-				mg: httpRequest(func(r *v1alpha2.Request) {
+				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
 					r.Status.Response.Body = `{"username":"john_doe_new_username"}`
 					r.Status.Response.StatusCode = 200
 				}),
@@ -361,7 +361,7 @@ func Test_isUpToDate(t *testing.T) {
 				localKube: &test.MockClient{
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
-				mg: httpRequest(func(r *v1alpha2.Request) {
+				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
 					r.Status.Response.Body = ""
 					r.Status.Response.StatusCode = 0
 					r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
@@ -386,7 +386,7 @@ func Test_isUpToDate(t *testing.T) {
 				localKube: &test.MockClient{
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
-				mg: httpRequest(func(r *v1alpha2.Request) {
+				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
 					r.Status.Response.Body = `{"id": "123"}`
 					r.Status.Response.StatusCode = 201
 					r.Status.RequestDetails.Method = http.MethodPost
@@ -423,7 +423,7 @@ func Test_isUpToDate(t *testing.T) {
 func Test_determineResponseCheck(t *testing.T) {
 	type args struct {
 		ctx         context.Context
-		cr          *v1alpha2.Request
+		cr          *v1alpha2.AsyncRequest
 		details     httpClient.HttpDetails
 		responseErr error
 	}
@@ -440,9 +440,9 @@ func Test_determineResponseCheck(t *testing.T) {
 		"DefaultResponseCheckSynced": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 								BaseUrl: "https://api.example.com/users",
@@ -484,9 +484,9 @@ func Test_determineResponseCheck(t *testing.T) {
 		"DefaultResponseCheckUnsynced": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 								BaseUrl: "https://api.example.com/users",
@@ -527,9 +527,9 @@ func Test_determineResponseCheck(t *testing.T) {
 		"CustomResponseCheckFails": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							ExpectedResponseCheck: v1alpha2.ExpectedResponseCheck{
 								Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
 								Logic: `.foo == "baz"`,
@@ -561,9 +561,9 @@ func Test_determineResponseCheck(t *testing.T) {
 		"UnknownResponseCheckType": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							ExpectedResponseCheck: v1alpha2.ExpectedResponseCheck{
 								Type: "UnknownType",
 							},
@@ -613,7 +613,7 @@ func Test_determineResponseCheck(t *testing.T) {
 
 func Test_isObjectValidForObservation(t *testing.T) {
 	type args struct {
-		cr *v1alpha2.Request
+		cr *v1alpha2.AsyncRequest
 	}
 
 	type want struct {
@@ -626,8 +626,8 @@ func Test_isObjectValidForObservation(t *testing.T) {
 	}{
 		"ValidStatusCode": {
 			args: args{
-				cr: &v1alpha2.Request{
-					Status: v1alpha2.RequestStatus{
+				cr: &v1alpha2.AsyncRequest{
+					Status: v1alpha2.AsyncRequestStatus{
 						Response: v1alpha2.Response{
 							Body:       "",
 							StatusCode: http.StatusOK,
@@ -644,8 +644,8 @@ func Test_isObjectValidForObservation(t *testing.T) {
 		},
 		"EmptyStatusCode": {
 			args: args{
-				cr: &v1alpha2.Request{
-					Status: v1alpha2.RequestStatus{
+				cr: &v1alpha2.AsyncRequest{
+					Status: v1alpha2.AsyncRequestStatus{
 						Response: v1alpha2.Response{
 							Body:       "",
 							StatusCode: 0,
@@ -659,8 +659,8 @@ func Test_isObjectValidForObservation(t *testing.T) {
 		},
 		"POSTMethodWithErrorResponse": {
 			args: args{
-				cr: &v1alpha2.Request{
-					Status: v1alpha2.RequestStatus{
+				cr: &v1alpha2.AsyncRequest{
+					Status: v1alpha2.AsyncRequestStatus{
 						Response: v1alpha2.Response{
 							Body:       "some response",
 							StatusCode: http.StatusInternalServerError,
@@ -677,8 +677,8 @@ func Test_isObjectValidForObservation(t *testing.T) {
 		},
 		"POSTMethodWithoutErrorResponse": {
 			args: args{
-				cr: &v1alpha2.Request{
-					Status: v1alpha2.RequestStatus{
+				cr: &v1alpha2.AsyncRequest{
+					Status: v1alpha2.AsyncRequestStatus{
 						Response: v1alpha2.Response{
 							Body:       "some response",
 							StatusCode: http.StatusOK,
@@ -712,7 +712,7 @@ func Test_isObjectValidForObservation(t *testing.T) {
 func Test_requestDetails(t *testing.T) {
 	type args struct {
 		ctx    context.Context
-		cr     *v1alpha2.Request
+		cr     *v1alpha2.AsyncRequest
 		action string
 	}
 
@@ -728,9 +728,9 @@ func Test_requestDetails(t *testing.T) {
 		"ValidMappingForGET": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 								BaseUrl: "https://api.example.com/users",
@@ -761,9 +761,9 @@ func Test_requestDetails(t *testing.T) {
 		"ValidMappingForPOST": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body:    "{\"username\": \"john_doe\", \"email\": \"john.doe@example.com\"}",
 								BaseUrl: "https://api.example.com/users",
@@ -793,9 +793,9 @@ func Test_requestDetails(t *testing.T) {
 		"MappingNotFound": {
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{},
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{},
 					},
 				},
 				action: "UNKNOWN_METHOD",

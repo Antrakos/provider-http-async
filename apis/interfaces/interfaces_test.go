@@ -27,8 +27,8 @@ import (
 )
 
 func TestClusterScopedInterfaceImplementations(t *testing.T) {
-	var _ interfaces.MappedHTTPRequestSpec = (*clusterrequestv1alpha2.RequestParameters)(nil)
-	var _ interfaces.MappedHTTPRequestSpec = (*clusterrequestv1alpha1.RequestParameters)(nil)
+	var _ interfaces.MappedHTTPRequestSpec = (*clusterrequestv1alpha2.AsyncRequestParameters)(nil)
+	var _ interfaces.MappedHTTPRequestSpec = (*clusterrequestv1alpha1.AsyncRequestParameters)(nil)
 
 	var _ interfaces.HTTPResponse = (*clusterrequestv1alpha2.Response)(nil)
 	var _ interfaces.HTTPResponse = (*clusterrequestv1alpha1.Response)(nil)
@@ -41,7 +41,7 @@ func TestClusterScopedInterfaceImplementations(t *testing.T) {
 }
 
 func TestNamespacedInterfaceImplementations(t *testing.T) {
-	var _ interfaces.MappedHTTPRequestSpec = (*namespacedrequestv1alpha2.RequestParameters)(nil)
+	var _ interfaces.MappedHTTPRequestSpec = (*namespacedrequestv1alpha2.AsyncRequestParameters)(nil)
 
 	var _ interfaces.HTTPResponse = (*namespacedrequestv1alpha2.Response)(nil)
 	var _ interfaces.HTTPMapping = (*namespacedrequestv1alpha2.Mapping)(nil)
@@ -49,17 +49,17 @@ func TestNamespacedInterfaceImplementations(t *testing.T) {
 }
 
 func TestClusterScopedV1Alpha2SpecificInterfaces(t *testing.T) {
-	var _ interfaces.ResponseCheckAware = (*clusterrequestv1alpha2.RequestParameters)(nil)
-	var _ interfaces.RequestStatus = (*clusterrequestv1alpha2.Request)(nil)
+	var _ interfaces.ResponseCheckAware = (*clusterrequestv1alpha2.AsyncRequestParameters)(nil)
+	var _ interfaces.AsyncRequestStatus = (*clusterrequestv1alpha2.AsyncRequest)(nil)
 }
 
 func TestNamespacedV1Alpha2SpecificInterfaces(t *testing.T) {
-	var _ interfaces.ResponseCheckAware = (*namespacedrequestv1alpha2.RequestParameters)(nil)
-	var _ interfaces.RequestStatus = (*namespacedrequestv1alpha2.Request)(nil)
+	var _ interfaces.ResponseCheckAware = (*namespacedrequestv1alpha2.AsyncRequestParameters)(nil)
+	var _ interfaces.AsyncRequestStatus = (*namespacedrequestv1alpha2.AsyncRequest)(nil)
 }
 
 func TestClusterScopedMethodAccess(t *testing.T) {
-	params := &clusterrequestv1alpha2.RequestParameters{
+	params := &clusterrequestv1alpha2.AsyncRequestParameters{
 		Mappings: []clusterrequestv1alpha2.Mapping{
 			{URL: "https://example.com", Method: "GET"},
 		},
@@ -76,7 +76,7 @@ func TestClusterScopedMethodAccess(t *testing.T) {
 }
 
 func TestNamespacedMethodAccess(t *testing.T) {
-	params := &namespacedrequestv1alpha2.RequestParameters{
+	params := &namespacedrequestv1alpha2.AsyncRequestParameters{
 		Mappings: []namespacedrequestv1alpha2.Mapping{
 			{URL: "https://api.example.com", Method: "POST"},
 		},

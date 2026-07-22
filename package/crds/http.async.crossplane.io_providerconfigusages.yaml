@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: providerconfigusages.http.crossplane.io
+  name: providerconfigusages.http.async.crossplane.io
 spec:
-  group: http.crossplane.io
+  group: http.async.crossplane.io
   names:
     categories:
     - crossplane

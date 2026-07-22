@@ -23,34 +23,34 @@ import (
 	"github.com/Antrakos/provider-http-async/apis/interfaces"
 )
 
-// Ensure RequestParameters implements MappedHTTPRequestSpec
-var _ interfaces.MappedHTTPRequestSpec = (*RequestParameters)(nil)
+// Ensure AsyncRequestParameters implements MappedHTTPRequestSpec
+var _ interfaces.MappedHTTPRequestSpec = (*AsyncRequestParameters)(nil)
 
-// Ensure RequestParameters implements ResponseCheckAware
-var _ interfaces.ResponseCheckAware = (*RequestParameters)(nil)
+// Ensure AsyncRequestParameters implements ResponseCheckAware
+var _ interfaces.ResponseCheckAware = (*AsyncRequestParameters)(nil)
 
 // GetWaitTimeout returns the maximum time duration for waiting.
-func (r *RequestParameters) GetWaitTimeout() *metav1.Duration {
+func (r *AsyncRequestParameters) GetWaitTimeout() *metav1.Duration {
 	return r.WaitTimeout
 }
 
 // GetInsecureSkipTLSVerify returns whether to skip TLS certificate verification.
-func (r *RequestParameters) GetInsecureSkipTLSVerify() bool {
+func (r *AsyncRequestParameters) GetInsecureSkipTLSVerify() bool {
 	return r.InsecureSkipTLSVerify
 }
 
 // GetSecretInjectionConfigs returns the secret injection configurations.
-func (r *RequestParameters) GetSecretInjectionConfigs() []common.SecretInjectionConfig {
+func (r *AsyncRequestParameters) GetSecretInjectionConfigs() []common.SecretInjectionConfig {
 	return r.SecretInjectionConfigs
 }
 
 // GetHeaders returns the default headers for the request.
-func (r *RequestParameters) GetHeaders() map[string][]string {
+func (r *AsyncRequestParameters) GetHeaders() map[string][]string {
 	return r.Headers
 }
 
 // GetMappings returns the HTTP mappings for different methods/actions.
-func (r *RequestParameters) GetMappings() []interfaces.HTTPMapping {
+func (r *AsyncRequestParameters) GetMappings() []interfaces.HTTPMapping {
 	result := make([]interfaces.HTTPMapping, len(r.Mappings))
 	for i := range r.Mappings {
 		result[i] = &r.Mappings[i]
@@ -59,22 +59,22 @@ func (r *RequestParameters) GetMappings() []interfaces.HTTPMapping {
 }
 
 // GetPayload returns the payload configuration.
-func (r *RequestParameters) GetPayload() interfaces.HTTPPayload {
+func (r *AsyncRequestParameters) GetPayload() interfaces.HTTPPayload {
 	return &r.Payload
 }
 
 // GetExpectedResponseCheck returns the expected response check configuration.
-func (r *RequestParameters) GetExpectedResponseCheck() interfaces.ResponseCheck {
+func (r *AsyncRequestParameters) GetExpectedResponseCheck() interfaces.ResponseCheck {
 	return &r.ExpectedResponseCheck
 }
 
 // GetIsRemovedCheck returns the is-removed check configuration.
-func (r *RequestParameters) GetIsRemovedCheck() interfaces.ResponseCheck {
+func (r *AsyncRequestParameters) GetIsRemovedCheck() interfaces.ResponseCheck {
 	return &r.IsRemovedCheck
 }
 
 // GetAllowedStatusCodes returns the HTTP status codes that should not be treated as errors.
-func (r *RequestParameters) GetAllowedStatusCodes() []int {
+func (r *AsyncRequestParameters) GetAllowedStatusCodes() []int {
 	return r.AllowedStatusCodes
 }
 
@@ -155,42 +155,42 @@ func (r *Response) GetHeaders() map[string][]string {
 	return r.Headers
 }
 
-// Ensure Request implements CachedResponse
-var _ interfaces.CachedResponse = (*Request)(nil)
+// Ensure AsyncRequest implements CachedResponse
+var _ interfaces.CachedResponse = (*AsyncRequest)(nil)
 
 // GetCachedResponse returns the cached response from the status.
-func (r *Request) GetCachedResponse() interfaces.HTTPResponse {
+func (r *AsyncRequest) GetCachedResponse() interfaces.HTTPResponse {
 	if r.Status.Response.StatusCode == 0 {
 		return nil
 	}
 	return &r.Status.Response
 }
 
-// Ensure Request implements RequestStatusReader
-var _ interfaces.RequestStatusReader = (*Request)(nil)
+// Ensure AsyncRequest implements RequestStatusReader
+var _ interfaces.RequestStatusReader = (*AsyncRequest)(nil)
 
 // GetResponse returns the HTTP response from status.
-func (r *Request) GetResponse() interfaces.HTTPResponse {
+func (r *AsyncRequest) GetResponse() interfaces.HTTPResponse {
 	return &r.Status.Response
 }
 
 // GetFailed returns the failure count.
-func (r *Request) GetFailed() int32 {
+func (r *AsyncRequest) GetFailed() int32 {
 	return r.Status.Failed
 }
 
 // GetRequestDetails returns the request details mapping.
-func (r *Request) GetRequestDetails() interfaces.HTTPMapping {
+func (r *AsyncRequest) GetRequestDetails() interfaces.HTTPMapping {
 	return &r.Status.RequestDetails
 }
 
-// Ensure Request implements RequestResource
-var _ interfaces.RequestResource = (*Request)(nil)
+// Ensure AsyncRequest implements RequestResource
+var _ interfaces.RequestResource = (*AsyncRequest)(nil)
 
 // GetSpec returns the request specification.
-func (r *Request) GetSpec() interfaces.MappedHTTPRequestSpec {
+func (r *AsyncRequest) GetSpec() interfaces.MappedHTTPRequestSpec {
 	return &r.Spec.ForProvider
 }
 
-// Ensure Request implements RequestStatus (read + write + cached)
-var _ interfaces.RequestStatus = (*Request)(nil)
+// Ensure AsyncRequest implements AsyncRequestStatus (read + write + cached)
+var _ interfaces.AsyncRequestStatus = (*AsyncRequest)(nil)

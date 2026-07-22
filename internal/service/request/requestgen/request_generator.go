@@ -51,7 +51,7 @@ func GenerateRequestDetails(svcCtx *service.ServiceContext, methodMapping interf
 	return RequestDetails{Body: body, Url: url, Headers: headersData}, nil, true
 }
 
-// GenerateRequestContext creates a JSON-compatible map from the specified Request's ForProvider and Response fields.
+// GenerateRequestContext creates a JSON-compatible map from the specified AsyncRequest's ForProvider and Response fields.
 // It merges the two maps, converts JSON strings to nested maps, and returns the resulting map.
 func GenerateRequestContext(forProvider interfaces.MappedHTTPRequestSpec, patchedResponse interfaces.HTTPResponse) map[string]interface{} {
 	baseMap, _ := json_util.StructToMap(forProvider)
@@ -71,9 +71,9 @@ func GenerateRequestContext(forProvider interfaces.MappedHTTPRequestSpec, patche
 	return baseMap
 }
 
-// GenerateValidRequestDetails generates valid request details based on the given Request resource and Mapping configuration.
-// It first attempts to generate request details using the HTTP response stored in the Request's status. If the generated
-// details are valid, the function returns them. If not, it falls back to using the cached response in the Request's status
+// GenerateValidRequestDetails generates valid request details based on the given AsyncRequest resource and Mapping configuration.
+// It first attempts to generate request details using the HTTP response stored in the AsyncRequest's status. If the generated
+// details are valid, the function returns them. If not, it falls back to using the cached response in the AsyncRequest's status
 // and attempts to generate request details again. The function returns the generated request details or an error if the
 // generation process fails.
 func GenerateValidRequestDetails(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext, mapping interfaces.HTTPMapping) (RequestDetails, error) {

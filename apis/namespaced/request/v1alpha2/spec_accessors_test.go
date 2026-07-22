@@ -23,7 +23,7 @@ func TestRequestParameters_Accessors(t *testing.T) {
 		},
 	}
 
-	params := &RequestParameters{
+	params := &AsyncRequestParameters{
 		WaitTimeout:            timeout,
 		InsecureSkipTLSVerify:  true,
 		Headers:                headers,
@@ -174,8 +174,8 @@ func TestResponse_Accessors(t *testing.T) {
 
 func TestRequest_CachedResponse(t *testing.T) {
 	// Test with cached response
-	req := &Request{
-		Status: RequestStatus{
+	req := &AsyncRequest{
+		Status: AsyncRequestStatus{
 			Response: Response{
 				StatusCode: 200,
 				Body:       "cached",
@@ -192,8 +192,8 @@ func TestRequest_CachedResponse(t *testing.T) {
 	}
 
 	// Test with no cached response
-	req2 := &Request{
-		Status: RequestStatus{
+	req2 := &AsyncRequest{
+		Status: AsyncRequestStatus{
 			Response: Response{
 				StatusCode: 0,
 			},
@@ -207,8 +207,8 @@ func TestRequest_CachedResponse(t *testing.T) {
 }
 
 func TestRequest_StatusReader(t *testing.T) {
-	req := &Request{
-		Status: RequestStatus{
+	req := &AsyncRequest{
+		Status: AsyncRequestStatus{
 			Response: Response{
 				StatusCode: 200,
 				Body:       "test",
@@ -243,9 +243,9 @@ func TestRequest_StatusReader(t *testing.T) {
 }
 
 func TestRequest_RequestResource(t *testing.T) {
-	req := &Request{
-		Spec: RequestSpec{
-			ForProvider: RequestParameters{
+	req := &AsyncRequest{
+		Spec: AsyncRequestSpec{
+			ForProvider: AsyncRequestParameters{
 				Payload: Payload{
 					BaseUrl: "https://api.example.com",
 				},

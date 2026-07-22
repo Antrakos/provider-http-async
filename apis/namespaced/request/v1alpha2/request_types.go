@@ -39,9 +39,9 @@ const (
 	ActionRemove  = "REMOVE"
 )
 
-// RequestParameters are the configurable fields of a Request.
+// AsyncRequestParameters are the configurable fields of an AsyncRequest.
 // +kubebuilder:validation:XValidation:rule="!(self.insecureSkipTLSVerify == true && has(self.tlsConfig))",message="insecureSkipTLSVerify and tlsConfig are mutually exclusive"
-type RequestParameters struct {
+type AsyncRequestParameters struct {
 	// Mappings defines the HTTP mappings for different methods.
 	// Either Method or Action must be specified. If both are omitted, the mapping will not be used.
 	// +kubebuilder:validation:MinItems=1
@@ -118,21 +118,21 @@ type Payload struct {
 	Body string `json:"body,omitempty"`
 }
 
-// A RequestSpec defines the desired state of a Request.
-type RequestSpec struct {
+// A AsyncRequestSpec defines the desired state of an AsyncRequest.
+type AsyncRequestSpec struct {
 	xpv2.ManagedResourceSpec `json:",inline"`
-	ForProvider              RequestParameters `json:"forProvider"`
+	ForProvider              AsyncRequestParameters `json:"forProvider"`
 }
 
-// RequestObservation are the observable fields of a Request.
+// AsyncRequestObservation are the observable fields of an AsyncRequest.
 type Response struct {
 	StatusCode int                 `json:"statusCode,omitempty"`
 	Body       string              `json:"body,omitempty"`
 	Headers    map[string][]string `json:"headers,omitempty"`
 }
 
-// A RequestStatus represents the observed state of a Request.
-type RequestStatus struct {
+// A AsyncRequestStatus represents the observed state of an AsyncRequest.
+type AsyncRequestStatus struct {
 	xpv2.ManagedResourceStatus `json:",inline"`
 	Response            Response `json:"response,omitempty"`
 	Cache               Cache    `json:"cache,omitempty"`
@@ -148,7 +148,7 @@ type Cache struct {
 
 // +kubebuilder:object:root=true
 
-// A Request is a namespaced HTTP request resource.
+// A AsyncRequest is a namespaced HTTP request resource.
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
@@ -156,31 +156,31 @@ type Cache struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,categories={crossplane,managed,http}
 // +kubebuilder:storageversion
-type Request struct {
+type AsyncRequest struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   RequestSpec   `json:"spec"`
-	Status RequestStatus `json:"status,omitempty"`
+	Spec   AsyncRequestSpec   `json:"spec"`
+	Status AsyncRequestStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-// RequestList contains a list of Request
-type RequestList struct {
+// AsyncRequestList contains a list of AsyncRequest
+type AsyncRequestList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []Request `json:"items"`
+	Items           []AsyncRequest `json:"items"`
 }
 
-// Request type metadata.
+// AsyncRequest type metadata.
 var (
-	RequestKind             = reflect.TypeOf(Request{}).Name()
+	RequestKind             = reflect.TypeOf(AsyncRequest{}).Name()
 	RequestGroupKind        = schema.GroupKind{Group: Group, Kind: RequestKind}.String()
 	RequestKindAPIVersion   = RequestKind + "." + SchemeGroupVersion.String()
 	RequestGroupVersionKind = SchemeGroupVersion.WithKind(RequestKind)
 )
 
 func init() {
-	SchemeBuilder.Register(&Request{}, &RequestList{})
+	SchemeBuilder.Register(&AsyncRequest{}, &AsyncRequestList{})
 }

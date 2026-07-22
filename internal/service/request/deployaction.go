@@ -9,7 +9,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 )
 
-// DeployAction executes the action based on the given Request resource and Mapping configuration.
+// DeployAction executes the action based on the given AsyncRequest resource and Mapping configuration.
 func DeployAction(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext, action string) error {
 	spec := crCtx.Spec()
 	mapping, err := requestmapping.GetMapping(spec, action, svcCtx.Logger)
@@ -31,7 +31,7 @@ func DeployAction(svcCtx *service.ServiceContext, crCtx *service.RequestCRContex
 		secretConfigs := spec.GetSecretInjectionConfigs()
 		datapatcher.ApplyResponseDataToSecrets(svcCtx.Ctx, svcCtx.LocalKube, svcCtx.Logger, &details.HttpResponse, secretConfigs, crCtx.GetCR())
 	} else {
-		svcCtx.Logger.Debug("Request is being deleted, skipping secret injection")
+		svcCtx.Logger.Debug("AsyncRequest is being deleted, skipping secret injection")
 	}
 
 	statusHandler, err := statushandler.NewStatusHandler(svcCtx, crCtx, details, sendErr)

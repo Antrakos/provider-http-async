@@ -23,32 +23,32 @@ import (
 	"github.com/Antrakos/provider-http-async/apis/interfaces"
 )
 
-// Ensure RequestParameters implements MappedHTTPRequestSpec
-var _ interfaces.MappedHTTPRequestSpec = (*RequestParameters)(nil)
+// Ensure AsyncRequestParameters implements MappedHTTPRequestSpec
+var _ interfaces.MappedHTTPRequestSpec = (*AsyncRequestParameters)(nil)
 
 // GetWaitTimeout returns the maximum time duration for waiting.
-func (r *RequestParameters) GetWaitTimeout() *metav1.Duration {
+func (r *AsyncRequestParameters) GetWaitTimeout() *metav1.Duration {
 	return r.WaitTimeout
 }
 
 // GetInsecureSkipTLSVerify returns whether to skip TLS certificate verification.
-func (r *RequestParameters) GetInsecureSkipTLSVerify() bool {
+func (r *AsyncRequestParameters) GetInsecureSkipTLSVerify() bool {
 	return r.InsecureSkipTLSVerify
 }
 
 // GetSecretInjectionConfigs returns the secret injection configurations.
 // v1alpha1 does not support secret injection, so this returns nil.
-func (r *RequestParameters) GetSecretInjectionConfigs() []common.SecretInjectionConfig {
+func (r *AsyncRequestParameters) GetSecretInjectionConfigs() []common.SecretInjectionConfig {
 	return nil
 }
 
 // GetHeaders returns the default headers for the request.
-func (r *RequestParameters) GetHeaders() map[string][]string {
+func (r *AsyncRequestParameters) GetHeaders() map[string][]string {
 	return r.Headers
 }
 
 // GetMappings returns the HTTP mappings for different methods/actions.
-func (r *RequestParameters) GetMappings() []interfaces.HTTPMapping {
+func (r *AsyncRequestParameters) GetMappings() []interfaces.HTTPMapping {
 	result := make([]interfaces.HTTPMapping, len(r.Mappings))
 	for i := range r.Mappings {
 		result[i] = &r.Mappings[i]
@@ -57,12 +57,12 @@ func (r *RequestParameters) GetMappings() []interfaces.HTTPMapping {
 }
 
 // GetPayload returns the payload configuration.
-func (r *RequestParameters) GetPayload() interfaces.HTTPPayload {
+func (r *AsyncRequestParameters) GetPayload() interfaces.HTTPPayload {
 	return &r.Payload
 }
 
 // GetAllowedStatusCodes returns the HTTP status codes that should not be treated as errors.
-func (r *RequestParameters) GetAllowedStatusCodes() []int {
+func (r *AsyncRequestParameters) GetAllowedStatusCodes() []int {
 	return r.AllowedStatusCodes
 }
 

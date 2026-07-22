@@ -33,7 +33,7 @@ func TestDeployAction(t *testing.T) {
 
 	type args struct {
 		ctx        context.Context
-		cr         *v1alpha2.Request
+		cr         *v1alpha2.AsyncRequest
 		action     string
 		localKube  client.Client
 		httpClient httpClient.Client
@@ -53,13 +53,13 @@ func TestDeployAction(t *testing.T) {
 			reason: "Should successfully execute POST action with JQ expressions",
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
+				cr: &v1alpha2.AsyncRequest{
 					ObjectMeta: v1.ObjectMeta{
 						Name:      "test-request",
 						Namespace: "testns",
 					},
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body:    testBody,
 								BaseUrl: testURL,
@@ -73,7 +73,7 @@ func TestDeployAction(t *testing.T) {
 							},
 						},
 					},
-					Status: v1alpha2.RequestStatus{},
+					Status: v1alpha2.AsyncRequestStatus{},
 				},
 				action: "CREATE",
 				localKube: &test.MockClient{
@@ -106,13 +106,13 @@ func TestDeployAction(t *testing.T) {
 			reason: "Should successfully execute GET action",
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
+				cr: &v1alpha2.AsyncRequest{
 					ObjectMeta: v1.ObjectMeta{
 						Name:      "test-request",
 						Namespace: "testns",
 					},
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								BaseUrl: testURL + "/123",
 							},
@@ -124,7 +124,7 @@ func TestDeployAction(t *testing.T) {
 							},
 						},
 					},
-					Status: v1alpha2.RequestStatus{},
+					Status: v1alpha2.AsyncRequestStatus{},
 				},
 				action: "OBSERVE",
 				localKube: &test.MockClient{
@@ -156,13 +156,13 @@ func TestDeployAction(t *testing.T) {
 			reason: "Should successfully execute PUT action",
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
+				cr: &v1alpha2.AsyncRequest{
 					ObjectMeta: v1.ObjectMeta{
 						Name:      "test-request",
 						Namespace: "testns",
 					},
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body:    `{"username": "john_updated"}`,
 								BaseUrl: testURL + "/123",
@@ -176,7 +176,7 @@ func TestDeployAction(t *testing.T) {
 							},
 						},
 					},
-					Status: v1alpha2.RequestStatus{},
+					Status: v1alpha2.AsyncRequestStatus{},
 				},
 				action: "UPDATE",
 				localKube: &test.MockClient{
@@ -209,13 +209,13 @@ func TestDeployAction(t *testing.T) {
 			reason: "Should successfully execute DELETE action",
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
+				cr: &v1alpha2.AsyncRequest{
 					ObjectMeta: v1.ObjectMeta{
 						Name:      "test-request",
 						Namespace: "testns",
 					},
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								BaseUrl: testURL + "/123",
 							},
@@ -227,7 +227,7 @@ func TestDeployAction(t *testing.T) {
 							},
 						},
 					},
-					Status: v1alpha2.RequestStatus{},
+					Status: v1alpha2.AsyncRequestStatus{},
 				},
 				action: "REMOVE",
 				localKube: &test.MockClient{
@@ -258,13 +258,13 @@ func TestDeployAction(t *testing.T) {
 			reason: "Should handle HTTP request errors",
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
+				cr: &v1alpha2.AsyncRequest{
 					ObjectMeta: v1.ObjectMeta{
 						Name:      "test-request",
 						Namespace: "testns",
 					},
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Payload: v1alpha2.Payload{
 								Body:    testBody,
 								BaseUrl: testURL,
@@ -278,7 +278,7 @@ func TestDeployAction(t *testing.T) {
 							},
 						},
 					},
-					Status: v1alpha2.RequestStatus{},
+					Status: v1alpha2.AsyncRequestStatus{},
 				},
 				action: "CREATE",
 				localKube: &test.MockClient{
@@ -299,13 +299,13 @@ func TestDeployAction(t *testing.T) {
 			reason: "Should return nil when mapping not found for action",
 			args: args{
 				ctx: context.Background(),
-				cr: &v1alpha2.Request{
+				cr: &v1alpha2.AsyncRequest{
 					ObjectMeta: v1.ObjectMeta{
 						Name:      "test-request",
 						Namespace: "testns",
 					},
-					Spec: v1alpha2.RequestSpec{
-						ForProvider: v1alpha2.RequestParameters{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
 							Mappings: []v1alpha2.Mapping{
 								{
 									Method: "GET",
@@ -314,7 +314,7 @@ func TestDeployAction(t *testing.T) {
 							},
 						},
 					},
-					Status: v1alpha2.RequestStatus{},
+					Status: v1alpha2.AsyncRequestStatus{},
 				},
 				action: "CREATE", // Mapping only has GET, not POST for CREATE
 				localKube: &test.MockClient{
