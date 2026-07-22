@@ -199,7 +199,7 @@ func Test_GenerateRequestDetails(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			svcCtx := service.NewServiceContext(context.Background(), tc.args.localKube, tc.args.logger, nil, nil)
-			got, gotErr, ok := GenerateRequestDetails(svcCtx, &tc.args.methodMapping, &tc.args.forProvider, &tc.args.response)
+			got, gotErr, ok := GenerateRequestDetails(svcCtx, &tc.args.methodMapping, &tc.args.forProvider, nil, &tc.args.response)
 			if diff := cmp.Diff(tc.want.err, gotErr, test.EquateErrors()); diff != "" {
 				t.Fatalf("GenerateRequestDetails(...): -want error, +got error: %s", diff)
 			}
@@ -450,10 +450,68 @@ func Test_generateRequestObject(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			got := GenerateRequestContext(&tc.args.forProvider, &tc.args.response)
+			got := GenerateRequestContext(&tc.args.forProvider, nil, &tc.args.response)
 			if diff := cmp.Diff(tc.want.result, got); diff != "" {
 				t.Fatalf("generateRequestObject(...): -want result, +got result: %s", diff)
 			}
 		})
 	}
+}
+
+func Test_generateRequestObjectWithStatus(t *testing.T) {
+	cr := &v1alpha2.AsyncRequest{}
+	cr.Status.ExternalRef = "789"
+	cr.Status.Polling.OperationRef = "projects/.../operations/123"
+	cr.Status.Response = v1alpha2.Response{StatusCode: 200, Body: `{"id":"123"}`}
+
+	forProvider := v1alpha2.AsyncRequestParameters{
+		Payload:  v1alpha2.Payload{BaseUrl: "https://api.example.com"},
+		Mappings: []v1alpha2.Mapping{{Method: "GET", URL: ".payload.baseUrl"}},
+	}
+
+	t.Run("status.externalRef resolves", func(t *testing.T) {
+		ctx := GenerateRequestContextForPoll(&forProvider, cr, &cr.Status.Response, nil)
+		status, ok := ctx["status"].(map[string]interface{})
+		if !ok {
+			t.Fatal("expected .status in jq context")
+		}
+		if got := status["externalRef"]; got != "789" {
+			t.Errorf("expected externalRef=789, got %v", got)
+		}
+		if got := status["operationRef"]; got != "projects/.../operations/123" {
+			t.Errorf("expected operationRef set, got %v", got)
+		}
+		if _, hasPoll := ctx["poll"]; hasPoll {
+			t.Error("expected no .poll key when pollResponse is nil")
+		}
+	})
+
+	t.Run("poll.response injects correctly", func(t *testing.T) {
+		pollResp := map[string]interface{}{
+			"body": map[string]interface{}{"done": true},
+		}
+		ctx := GenerateRequestContextForPoll(&forProvider, cr, &cr.Status.Response, pollResp)
+		poll, ok := ctx["poll"].(map[string]interface{})
+		if !ok {
+			t.Fatal("expected .poll in jq context")
+		}
+		resp, ok := poll["response"].(map[string]interface{})
+		if !ok {
+			t.Fatal("expected .poll.response")
+		}
+		body, ok := resp["body"].(map[string]interface{})
+		if !ok {
+			t.Fatal("expected .poll.response.body")
+		}
+		if body["done"] != true {
+			t.Errorf("expected .poll.response.body.done=true, got %v", body["done"])
+		}
+	})
+
+	t.Run("no status when nil", func(t *testing.T) {
+		ctx := GenerateRequestContext(&forProvider, nil, &cr.Status.Response)
+		if _, hasStatus := ctx["status"]; hasStatus {
+			t.Error("expected no .status key when status reader is nil")
+		}
+	})
 }

@@ -80,6 +80,16 @@ type AsyncRequestParameters struct {
 	// override that behavior for specific status codes (e.g., treating 404 as valid).
 	// +optional
 	AllowedStatusCodes []int `json:"allowedStatusCodes,omitempty"`
+
+	// ExternalRef is a top-level jq expression that extracts the stable external
+	// identifier. Evaluated against .poll.response first, falling back to
+	// .response. The result is written to status.externalRef.
+	// +optional
+	ExternalRef string `json:"externalRef,omitempty"`
+
+	// OIDC overrides the ProviderConfig OIDC settings for this resource.
+	// +optional
+	OIDC *common.OIDCConfig `json:"oidc,omitempty"`
 }
 
 type Mapping struct {
@@ -99,6 +109,11 @@ type Mapping struct {
 
 	// Headers specifies the headers for the request.
 	Headers map[string][]string `json:"headers,omitempty"`
+
+	// Polling declares how to poll a long-running operation produced by this
+	// mapping. Only meaningful on CREATE/UPDATE/DELETE mappings.
+	// +optional
+	Polling *common.Polling `json:"polling,omitempty"`
 }
 
 type ExpectedResponseCheck struct {
@@ -139,6 +154,39 @@ type AsyncRequestStatus struct {
 	Failed              int32    `json:"failed,omitempty"`
 	Error               string   `json:"error,omitempty"`
 	RequestDetails      Mapping  `json:"requestDetails,omitempty"`
+
+	// ExternalRef is the stable external identifier extracted after the first
+	// successful CREATE+poll cycle (or seeded from crossplane.io/external-name on
+	// import). Used by OBSERVE/UPDATE/DELETE URLs via .status.externalRef.
+	// +optional
+	ExternalRef string `json:"externalRef,omitempty"`
+
+	// Polling holds state for the in-flight long-running operation poll loop.
+	// +optional
+	Polling PollingStatus `json:"polling,omitempty"`
+}
+
+// PollingStatus groups the fields that track an in-flight long-running operation.
+// All three fields are set together when polling begins and cleared together when it ends.
+type PollingStatus struct {
+	// OperationRef is the in-flight mutate operation URL. It is the crash-recovery
+	// anchor: a reconcile that finds it non-empty resumes polling instead of
+	// re-firing the mutate call.
+	// +optional
+	OperationRef string `json:"operationRef,omitempty"`
+
+	// StartedAt is the time polling began. Combined with polling.timeout it gives
+	// the absolute deadline across all reconciles, preventing the timeout from
+	// resetting on every requeue.
+	// +optional
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+
+	// TerminalError holds the verbatim message from a terminal poll failure
+	// (polling.error non-null, or a permanent configuration error). While set, the
+	// controller reports the resource unhealthy and stops re-firing the mutate call
+	// until the spec changes (tracked via observedGeneration). Cleared on recovery.
+	// +optional
+	TerminalError string `json:"terminalError,omitempty"`
 }
 
 type Cache struct {
@@ -152,6 +200,7 @@ type Cache struct {
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="EXTERNAL-REF",type="string",JSONPath=".status.externalRef"
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,categories={crossplane,managed,http}

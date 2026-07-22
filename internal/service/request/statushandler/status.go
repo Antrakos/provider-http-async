@@ -28,6 +28,7 @@ type requestStatusHandler struct {
 	resource      *utils.RequestResource
 	responseError error
 	forProvider   interfaces.MappedHTTPRequestSpec
+	status        interfaces.RequestStatusReader
 }
 
 // SetRequestStatus updates the current AsyncRequest's status to reflect the details of the last HTTP request that occurred.
@@ -101,7 +102,7 @@ func (r *requestStatusHandler) appendExtraSetters(forProvider interfaces.MappedH
 // details are not valid, it means that instead of using the response, the cache should be used.
 func (r *requestStatusHandler) shouldSetCache(forProvider interfaces.MappedHTTPRequestSpec) bool {
 	for _, mapping := range forProvider.GetMappings() {
-		requestDetails, _, ok := requestgen.GenerateRequestDetails(r.svcCtx, mapping, forProvider, &r.resource.HttpResponse)
+		requestDetails, _, ok := requestgen.GenerateRequestDetails(r.svcCtx, mapping, forProvider, r.status, &r.resource.HttpResponse)
 		if !(requestgen.IsRequestValid(requestDetails) && ok) {
 			return false
 		}
@@ -142,6 +143,7 @@ func NewStatusHandler(svcCtx *service.ServiceContext, crCtx *service.RequestCRCo
 		},
 		responseError: requestErr,
 		forProvider:   forProvider,
+		status:        crCtx.Status(),
 	}
 
 	return requestStatusHandler, nil

@@ -12,6 +12,8 @@ import (
 	"github.com/Antrakos/provider-http-async/internal/service/request/requestmapping"
 	"github.com/Antrakos/provider-http-async/internal/utils"
 	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 )
 
 const (
@@ -24,6 +26,12 @@ type ObserveRequestDetails struct {
 	Details       httpClient.HttpDetails
 	ResponseError error
 	Synced        bool
+	// TerminalError, when non-empty, means the resource is in a stable terminal
+	// failure state (a prior poll failed with polling.error non-null, and the spec
+	// has not changed since). The controller must report the resource unhealthy
+	// (Ready=False) but must NOT re-trigger Create/Update — hence Synced is reported
+	// true so the managed reconciler treats it as up-to-date and takes no action.
+	TerminalError string
 }
 
 // NewObserveRequestDetails is a constructor function that initializes
@@ -36,6 +44,15 @@ func NewObserve(details httpClient.HttpDetails, resErr error, synced bool) Obser
 	}
 }
 
+// NewTerminalObserve returns an observation representing a stable terminal failure:
+// up-to-date (no Create/Update) but unhealthy, carrying the failure message.
+func NewTerminalObserve(terminalErr string) ObserveRequestDetails {
+	return ObserveRequestDetails{
+		Synced:        true,
+		TerminalError: terminalErr,
+	}
+}
+
 // NewObserveRequestDetails is a constructor function that initializes
 // an instance of ObserveRequestDetails with default values.
 func FailedObserve() ObserveRequestDetails {
@@ -44,8 +61,35 @@ func FailedObserve() ObserveRequestDetails {
 	}
 }
 
-// IsUpToDate checks whether desired spec up to date with the observed state for a given request
+// IsUpToDate checks whether desired spec up to date with the observed state for a given request.
+// When operationRef is non-empty an async mutate LRO is still in flight; OBSERVE must not fire
+// because externalRef may not yet be written. Return ResourceUpToDate=false so the reconciler
+// calls Create/Update (which will resume the poll loop via resumeURL) instead.
 func IsUpToDate(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext) (ObserveRequestDetails, error) {
+	status := crCtx.Status()
+
+	// Terminal failure: a prior poll failed terminally (polling.error non-null) or a
+	// permanent config error occurred. Stay in this stable state — reporting up-to-date
+	// so the reconciler does not re-fire Create/Update — until the spec changes, which is
+	// detected via generation drift. This is the "stalled, needs human intervention"
+	// pattern; the resource remains visible and is marked unhealthy via conditions.
+	if terminalErr := status.GetTerminalError(); terminalErr != "" {
+		if status.GetGeneration() == status.GetObservedGeneration() {
+			return NewTerminalObserve(terminalErr), nil
+		}
+		// Spec changed since the terminal failure — clear it and fall through to a normal
+		// observe so the resource gets another chance.
+		if err := clearTerminalError(svcCtx, crCtx); err != nil {
+			return FailedObserve(), err
+		}
+	}
+
+	if status.GetOperationRef() != "" {
+		// LRO in flight — report not-up-to-date so the reconciler re-enters DeployAction to
+		// resume the poll loop. Do not trigger an OBSERVE call; externalRef may be empty.
+		return NewObserve(httpClient.HttpDetails{}, nil, false), nil
+	}
+
 	spec := crCtx.Spec()
 	mapping, err := requestmapping.GetMapping(spec, common.ActionObserve, svcCtx.Logger)
 	if err != nil {
@@ -110,12 +154,33 @@ func determineIfRemoved(svcCtx *service.ServiceContext, crCtx *service.RequestCR
 	return responseChecker.Check(svcCtx, crCtx, details, responseErr)
 }
 
-// isObjectValidForObservation checks if the object is valid for observation
+// clearTerminalError clears the terminal failure message so a spec-changed resource can be
+// reconciled again. RetryOnConflict handles optimistic-lock conflicts from concurrent reconciles.
+func clearTerminalError(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext) error {
+	resource := crCtx.GetCR()
+	nn := types.NamespacedName{Name: resource.GetName(), Namespace: resource.GetNamespace()}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := svcCtx.LocalKube.Get(svcCtx.Ctx, nn, resource); err != nil {
+			return errors.Wrap(err, "failed to get resource before clearing terminal error")
+		}
+		crCtx.StatusWriter().SetTerminalError("")
+		return svcCtx.LocalKube.Status().Update(svcCtx.Ctx, resource)
+	})
+}
+
+// isObjectValidForObservation returns true if the resource has been observed before.
+// A resource is considered "already created" if either a prior response was
+// stored (the original provider-http signal) OR externalRef is populated (set
+// after the first async CREATE+poll cycle, or seeded from external-name for
+// import). Without this second condition an async resource whose first OBSERVE
+// returns non-2xx would be misidentified as non-existent and CREATE would re-fire.
 func isObjectValidForObservation(crCtx *service.RequestCRContext) bool {
 	response := crCtx.Status().GetResponse()
 	requestDetails := crCtx.Status().GetRequestDetails()
 	spec := crCtx.Spec()
 
-	return response.GetStatusCode() != 0 &&
+	hasResponse := response.GetStatusCode() != 0 &&
 		!(requestDetails.GetMethod() == http.MethodPost && utils.IsHTTPError(response.GetStatusCode(), spec.GetAllowedStatusCodes()))
+
+	return hasResponse || crCtx.Status().GetExternalRefValue() != ""
 }

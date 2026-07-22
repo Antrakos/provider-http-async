@@ -1,0 +1,21 @@
+apiVersion: http.async.m.crossplane.io/v1alpha2
+kind: ProviderConfig
+metadata:
+  name: vertex-ai-gcp
+  namespace: my-team
+spec:
+  credentials:
+    source: None
+  oidc:
+    exchange:
+      tokenEndpoint: https://sts.googleapis.com/v1/token
+      audience: //iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/my-pool/providers/my-provider
+      extraParams:
+        grant_type: urn:ietf:params:oauth:grant-type:token-exchange
+        requested_token_type: urn:ietf:params:oauth:token-type:access_token
+        scope: https://www.googleapis.com/auth/cloud-platform
+    inject:
+      type: header
+      header: Authorization
+      prefix: "Bearer "
+    refreshBefore: 5m

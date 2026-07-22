@@ -1,0 +1,32 @@
+# Plain synchronous AsyncRequest — no polling, no OIDC.
+# Demonstrates that AsyncRequest is a drop-in superset of provider-http:
+# existing manifests continue to work unchanged.
+apiVersion: http.async.m.crossplane.io/v1alpha2
+kind: AsyncRequest
+metadata:
+  name: manage-user-sync
+  namespace: default
+spec:
+  forProvider:
+    payload:
+      baseUrl: https://api.example.com/v1
+      body: |
+        {"username": "alice", "email": "alice@example.com"}
+    mappings:
+      - action: CREATE
+        method: POST
+        url: '.payload.baseUrl + "/users"'
+        body: .payload.body
+      - action: OBSERVE
+        method: GET
+        url: '.payload.baseUrl + "/users/" + (.response.body.id | tostring)'
+      - action: UPDATE
+        method: PUT
+        url: '.payload.baseUrl + "/users/" + (.response.body.id | tostring)'
+        body: .payload.body
+      - action: REMOVE
+        method: DELETE
+        url: '.payload.baseUrl + "/users/" + (.response.body.id | tostring)'
+  providerConfigRef:
+    name: default
+    kind: ProviderConfig

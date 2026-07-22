@@ -22,13 +22,15 @@ type RequestDetails struct {
 }
 
 // GenerateRequestDetails generates request details.
-func GenerateRequestDetails(svcCtx *service.ServiceContext, methodMapping interfaces.HTTPMapping, forProvider interfaces.MappedHTTPRequestSpec, response interfaces.HTTPResponse) (RequestDetails, error, bool) {
+// status may be nil; when non-nil it exposes .status (externalRef/operationRef) to
+// the URL, body, and header jq expressions, as required by the PRD jq-context contract.
+func GenerateRequestDetails(svcCtx *service.ServiceContext, methodMapping interfaces.HTTPMapping, forProvider interfaces.MappedHTTPRequestSpec, status interfaces.RequestStatusReader, response interfaces.HTTPResponse) (RequestDetails, error, bool) {
 	patchedResponse, err := datapatcher.PatchSecretsIntoResponse(svcCtx.Ctx, svcCtx.LocalKube, response, svcCtx.Logger)
 	if err != nil {
 		return RequestDetails{}, err, false
 	}
 
-	jqObject := GenerateRequestContext(forProvider, patchedResponse)
+	jqObject := GenerateRequestContext(forProvider, status, patchedResponse)
 	url, err := generateURL(methodMapping.GetURL(), jqObject)
 	if err != nil {
 		return RequestDetails{}, err, false
@@ -53,18 +55,87 @@ func GenerateRequestDetails(svcCtx *service.ServiceContext, methodMapping interf
 
 // GenerateRequestContext creates a JSON-compatible map from the specified AsyncRequest's ForProvider and Response fields.
 // It merges the two maps, converts JSON strings to nested maps, and returns the resulting map.
-func GenerateRequestContext(forProvider interfaces.MappedHTTPRequestSpec, patchedResponse interfaces.HTTPResponse) map[string]interface{} {
+// status may be nil (no .status key injected).
+func GenerateRequestContext(forProvider interfaces.MappedHTTPRequestSpec, status interfaces.RequestStatusReader, patchedResponse interfaces.HTTPResponse) map[string]interface{} {
+	return GenerateRequestContextForPoll(forProvider, status, patchedResponse, nil)
+}
+
+// GenerateRequestContextForPoll builds the jq object with optional .status and .poll.response injection.
+// status may be nil (no .status key injected). pollResponse may be nil (no .poll key injected).
+func GenerateRequestContextForPoll(
+	forProvider interfaces.MappedHTTPRequestSpec,
+	status interfaces.RequestStatusReader,
+	patchedResponse interfaces.HTTPResponse,
+	pollResponse map[string]interface{},
+) map[string]interface{} {
 	baseMap, _ := json_util.StructToMap(forProvider)
-	statusMap, _ := json_util.StructToMap(map[string]interface{}{
+	responseMap, _ := json_util.StructToMap(map[string]interface{}{
 		"response": patchedResponse,
 	})
 
-	maps.Copy(baseMap, statusMap)
+	maps.Copy(baseMap, responseMap)
+
+	if status != nil {
+		statusMap := map[string]interface{}{
+			"externalRef":  status.GetExternalRefValue(),
+			"operationRef": status.GetOperationRef(),
+		}
+		baseMap["status"] = statusMap
+	}
+
+	if pollResponse != nil {
+		baseMap["poll"] = map[string]interface{}{
+			"response": pollResponse,
+		}
+	}
+
 	json_util.ConvertJSONStringsToMaps(&baseMap)
 
-	if responseMap, ok := baseMap["response"].(map[string]interface{}); ok {
-		if _, exists := responseMap["headers"]; !exists {
-			responseMap["headers"] = nil
+	if resp, ok := baseMap["response"].(map[string]interface{}); ok {
+		if _, exists := resp["headers"]; !exists {
+			resp["headers"] = nil
+		}
+	}
+
+	return baseMap
+}
+
+// GenerateRequestContextFromMap builds the jq object using a raw mutate-response map
+// (already in {body, headers, statusCode} form) rather than an interfaces.HTTPResponse.
+// This is the path used by the poll loop, where .response is the stable mutate response
+// carried as a map across iterations. Injecting it through StructToMap on a wrapper type
+// would drop the body (unexported fields serialize to {}), so it is merged directly.
+func GenerateRequestContextFromMap(
+	forProvider interfaces.MappedHTTPRequestSpec,
+	status interfaces.RequestStatusReader,
+	responseMap map[string]interface{},
+	pollResponse map[string]interface{},
+) map[string]interface{} {
+	baseMap, _ := json_util.StructToMap(forProvider)
+
+	if responseMap == nil {
+		responseMap = map[string]interface{}{}
+	}
+	baseMap["response"] = responseMap
+
+	if status != nil {
+		baseMap["status"] = map[string]interface{}{
+			"externalRef":  status.GetExternalRefValue(),
+			"operationRef": status.GetOperationRef(),
+		}
+	}
+
+	if pollResponse != nil {
+		baseMap["poll"] = map[string]interface{}{
+			"response": pollResponse,
+		}
+	}
+
+	json_util.ConvertJSONStringsToMaps(&baseMap)
+
+	if resp, ok := baseMap["response"].(map[string]interface{}); ok {
+		if _, exists := resp["headers"]; !exists {
+			resp["headers"] = nil
 		}
 	}
 
@@ -78,15 +149,16 @@ func GenerateRequestContext(forProvider interfaces.MappedHTTPRequestSpec, patche
 // generation process fails.
 func GenerateValidRequestDetails(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext, mapping interfaces.HTTPMapping) (RequestDetails, error) {
 	spec := crCtx.Spec()
-	response := crCtx.Status().GetResponse()
+	status := crCtx.Status()
+	response := status.GetResponse()
 	cachedResponse := crCtx.CachedResponse().GetCachedResponse()
 
-	requestDetails, _, ok := GenerateRequestDetails(svcCtx, mapping, spec, response)
+	requestDetails, _, ok := GenerateRequestDetails(svcCtx, mapping, spec, status, response)
 	if IsRequestValid(requestDetails) && ok {
 		return requestDetails, nil
 	}
 
-	requestDetails, err, _ := GenerateRequestDetails(svcCtx, mapping, spec, cachedResponse)
+	requestDetails, err, _ := GenerateRequestDetails(svcCtx, mapping, spec, status, cachedResponse)
 	if err != nil {
 		return RequestDetails{}, err
 	}

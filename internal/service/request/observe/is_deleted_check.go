@@ -45,7 +45,7 @@ func (c *customIsRemovedResponseCheck) Check(svcCtx *service.ServiceContext, crC
 	logic := responseCheckAware.GetIsRemovedCheck().GetLogic()
 	customCheck := &customCheck{}
 
-	isRemoved, err := customCheck.check(svcCtx, spec, details, logic)
+	isRemoved, err := customCheck.check(svcCtx, spec, crCtx.Status(), details, logic)
 	if err != nil {
 		return errors.Errorf(errExpectedFormat, "isRemovedCheck", err.Error())
 	} else if isRemoved {

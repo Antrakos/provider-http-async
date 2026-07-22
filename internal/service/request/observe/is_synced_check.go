@@ -125,7 +125,7 @@ func (c *customIsUpToDateResponseCheck) Check(svcCtx *service.ServiceContext, cr
 	logic := responseCheckAware.GetExpectedResponseCheck().GetLogic()
 	customCheck := &customCheck{}
 
-	isUpToDate, err := customCheck.check(svcCtx, spec, details, logic)
+	isUpToDate, err := customCheck.check(svcCtx, spec, crCtx.Status(), details, logic)
 	if err != nil {
 		return false, errors.Errorf(errExpectedFormat, "ExpectedResponseCheck", err.Error())
 	}

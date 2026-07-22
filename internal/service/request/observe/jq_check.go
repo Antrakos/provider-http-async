@@ -21,14 +21,16 @@ type responseCheck interface {
 type customCheck struct{}
 
 // Check performs a custom response check using JQ logic.
-func (c *customCheck) check(svcCtx *service.ServiceContext, spec interfaces.MappedHTTPRequestSpec, details httpClient.HttpDetails, logic string) (bool, error) {
+// status may be nil; when non-nil it exposes .status to the check expression, matching
+// the PRD contract that expectedResponseCheck can reference .status.externalRef.
+func (c *customCheck) check(svcCtx *service.ServiceContext, spec interfaces.MappedHTTPRequestSpec, status interfaces.RequestStatusReader, details httpClient.HttpDetails, logic string) (bool, error) {
 	// Convert response to a map and apply JQ logic
 	sensitiveResponse, err := datapatcher.PatchSecretsIntoResponse(svcCtx.Ctx, svcCtx.LocalKube, &details.HttpResponse, svcCtx.Logger)
 	if err != nil {
 		return false, err
 	}
 
-	sensitiveRequestContext := requestgen.GenerateRequestContext(spec, sensitiveResponse)
+	sensitiveRequestContext := requestgen.GenerateRequestContext(spec, status, sensitiveResponse)
 
 	jqQuery := utils.NormalizeWhitespace(logic)
 	sensitiveJQQuery, err := datapatcher.PatchSecretsIntoString(svcCtx.Ctx, svcCtx.LocalKube, jqQuery, svcCtx.Logger)

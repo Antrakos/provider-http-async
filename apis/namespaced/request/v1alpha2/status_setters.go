@@ -1,6 +1,10 @@
 package v1alpha2
 
-import "time"
+import (
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
 
 func (d *AsyncRequest) SetStatusCode(statusCode int) {
 	d.Status.Response.StatusCode = statusCode
@@ -38,4 +42,25 @@ func (d *AsyncRequest) SetCache(statusCode int, headers map[string][]string, bod
 	d.Status.Cache.Response.Headers = headers
 	d.Status.Cache.Response.Body = body
 	d.Status.Cache.LastUpdated = time.Now().UTC().Format(time.RFC3339)
+}
+
+func (d *AsyncRequest) SetExternalRef(ref string) {
+	d.Status.ExternalRef = ref
+}
+
+func (d *AsyncRequest) SetOperationRef(ref string) {
+	d.Status.Polling.OperationRef = ref
+}
+
+func (d *AsyncRequest) SetTerminalError(msg string) {
+	d.Status.Polling.TerminalError = msg
+	d.Status.Error = msg
+}
+
+func (d *AsyncRequest) SetObservedGeneration(generation int64) {
+	d.Status.SetObservedGeneration(generation)
+}
+
+func (d *AsyncRequest) SetOperationStartedAt(t *metav1.Time) {
+	d.Status.Polling.StartedAt = t
 }

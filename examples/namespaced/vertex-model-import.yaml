@@ -1,0 +1,42 @@
+# Import an existing Vertex AI model by setting crossplane.io/external-name to
+# the model's short ID. On the first OBSERVE the controller seeds status.externalRef
+# from this annotation, then immediately observes the model instead of recreating it.
+apiVersion: http.async.m.crossplane.io/v1alpha2
+kind: AsyncRequest
+metadata:
+  name: my-vertex-model-import
+  namespace: my-team
+  annotations:
+    crossplane.io/external-name: "789"   # existing model short ID
+spec:
+  providerConfigRef:
+    name: vertex-ai-gcp
+    kind: ProviderConfig
+  forProvider:
+    payload:
+      baseUrl: https://us-central1-aiplatform.googleapis.com/v1beta1/projects/my-project/locations/us-central1
+      body: |
+        {"model": {"displayName": "my-model"}}
+
+    mappings:
+      - action: OBSERVE
+        method: GET
+        url: '.payload.baseUrl + "/models/" + .status.externalRef'
+
+      - action: UPDATE
+        method: PATCH
+        url: '.payload.baseUrl + "/models/" + .status.externalRef'
+        body: '{"displayName": .payload.body.model.displayName}'
+
+      - action: REMOVE
+        method: DELETE
+        url: '.payload.baseUrl + "/models/" + .status.externalRef'
+        polling:
+          url: .response.body.name
+          done: .poll.response.body.done == true
+          timeout: 10m
+
+    expectedResponseCheck:
+      type: CUSTOM
+      logic: |
+        .response.body.displayName == .payload.body.model.displayName

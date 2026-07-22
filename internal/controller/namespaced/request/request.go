@@ -30,6 +30,7 @@ import (
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/event"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/ratelimiter"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
@@ -48,11 +49,12 @@ import (
 const (
 	errNotRequest              = "managed resource is not a namespaced AsyncRequest custom resource"
 	errTrackPCUsage            = "cannot track ProviderConfig usage"
-	errNewHttpClient           = "cannot create new Http client"
-	errFailedToSendHttpRequest = "something went wrong"
+	errNewHttpClient           = "cannot create new HTTP client"
+	errFailedToSendHttpRequest = "failed to execute HTTP action"
 	errFailedToCheckIfUpToDate = "failed to check if request is up to date"
 	errGetLatestVersion        = "failed to get the latest version of the resource"
 	errExtractCredentials      = "cannot extract credentials"
+	errBuildTLSConfig          = "failed to build TLS configuration"
 
 	errGetPC  = "cannot get ProviderConfig"
 	errGetCPC = "cannot get ClusterProviderConfig"
@@ -102,8 +104,6 @@ type connector struct {
 }
 
 // Connect creates a new external client using the provider config.
-//
-//gocyclo:ignore
 func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
 	cr, ok := mg.(*v1alpha2.AsyncRequest)
 	if !ok {
@@ -116,7 +116,6 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.Wrap(err, errTrackPCUsage)
 	}
 
-	// Set default providerConfigRef if not specified
 	if cr.GetProviderConfigReference() == nil {
 		cr.SetProviderConfigReference(&xpv2.ProviderConfigReference{
 			Name: "default",
@@ -125,32 +124,53 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		l.Debug("No providerConfigRef specified, defaulting to 'default'")
 	}
 
-	var cd apisv1alpha2.ProviderCredentials
-	var providerTLS *common.TLSConfig
+	cd, providerTLS, providerOIDC, err := c.resolveProviderConfig(ctx, mg)
+	if err != nil {
+		return nil, err
+	}
 
-	// Switch to ModernManaged resource to get ProviderConfigRef
+	h, err := c.buildHTTPClient(ctx, l, cr, cd, providerOIDC)
+	if err != nil {
+		return nil, err
+	}
+
+	tlsConfigData, err := c.buildTLSConfigData(ctx, cr, providerTLS)
+	if err != nil {
+		return nil, errors.Wrap(err, errBuildTLSConfig)
+	}
+
+	return &external{
+		localKube:     c.kube,
+		logger:        l,
+		http:          h,
+		tlsConfigData: tlsConfigData,
+	}, nil
+}
+
+// resolveProviderConfig fetches credentials, TLS, and OIDC from the referenced ProviderConfig or ClusterProviderConfig.
+func (c *connector) resolveProviderConfig(ctx context.Context, mg resource.Managed) (apisv1alpha2.ProviderCredentials, *common.TLSConfig, *common.OIDCConfig, error) {
 	m := mg.(resource.ModernManaged)
 	ref := m.GetProviderConfigReference()
-
 	switch ref.Kind {
 	case "ProviderConfig":
 		pc := &apisv1alpha2.ProviderConfig{}
 		if err := c.kube.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: m.GetNamespace()}, pc); err != nil {
-			return nil, errors.Wrap(err, errGetPC)
+			return apisv1alpha2.ProviderCredentials{}, nil, nil, errors.Wrap(err, errGetPC)
 		}
-		cd = pc.Spec.Credentials
-		providerTLS = pc.Spec.TLS
+		return pc.Spec.Credentials, pc.Spec.TLS, pc.Spec.OIDC, nil
 	case "ClusterProviderConfig":
 		cpc := &apisv1alpha2.ClusterProviderConfig{}
 		if err := c.kube.Get(ctx, types.NamespacedName{Name: ref.Name}, cpc); err != nil {
-			return nil, errors.Wrap(err, errGetCPC)
+			return apisv1alpha2.ProviderCredentials{}, nil, nil, errors.Wrap(err, errGetCPC)
 		}
-		cd = cpc.Spec.Credentials
-		providerTLS = cpc.Spec.TLS
+		return cpc.Spec.Credentials, cpc.Spec.TLS, cpc.Spec.OIDC, nil
 	default:
-		return nil, errors.Errorf("unsupported provider config kind: %s", ref.Kind)
+		return apisv1alpha2.ProviderCredentials{}, nil, nil, errors.Errorf("unsupported provider config kind: %s", ref.Kind)
 	}
+}
 
+// buildHTTPClient constructs the HTTP client, optionally wrapping it with OIDC.
+func (c *connector) buildHTTPClient(ctx context.Context, l logging.Logger, cr *v1alpha2.AsyncRequest, cd apisv1alpha2.ProviderCredentials, providerOIDC *common.OIDCConfig) (httpClient.Client, error) {
 	data, err := resource.CommonCredentialExtractor(ctx, cd.Source, c.kube, cd.CommonCredentialSelectors)
 	if err != nil {
 		return nil, errors.Wrap(err, errExtractCredentials)
@@ -161,29 +181,22 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.Wrap(err, errNewHttpClient)
 	}
 
-	// Merge TLS configs: resource-level overrides provider-level
-	mergedTLSConfig := httpClient.MergeTLSConfigs(cr.Spec.ForProvider.TLSConfig, providerTLS)
+	if effectiveOIDC := common.MergeOIDCConfigs(cr.Spec.ForProvider.OIDC, providerOIDC); effectiveOIDC != nil {
+		h = httpClient.NewOIDCClient(h, effectiveOIDC)
+	}
+	return h, nil
+}
 
-	// Apply InsecureSkipTLSVerify from AsyncRequest spec if set
+// buildTLSConfigData merges TLS configuration from the resource and provider, then loads cert data.
+func (c *connector) buildTLSConfigData(ctx context.Context, cr *v1alpha2.AsyncRequest, providerTLS *common.TLSConfig) (*httpClient.TLSConfigData, error) {
+	merged := httpClient.MergeTLSConfigs(cr.Spec.ForProvider.TLSConfig, providerTLS)
 	if cr.Spec.ForProvider.InsecureSkipTLSVerify {
-		if mergedTLSConfig == nil {
-			mergedTLSConfig = &common.TLSConfig{}
+		if merged == nil {
+			merged = &common.TLSConfig{}
 		}
-		mergedTLSConfig.InsecureSkipVerify = true
+		merged.InsecureSkipVerify = true
 	}
-
-	// Load TLS configuration from secrets
-	tlsConfigData, err := httpClient.LoadTLSConfig(ctx, c.kube, mergedTLSConfig)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to load TLS configuration")
-	}
-
-	return &external{
-		localKube:     c.kube,
-		logger:        l,
-		http:          h,
-		tlsConfigData: tlsConfigData,
-	}, nil
+	return httpClient.LoadTLSConfig(ctx, c.kube, merged)
 }
 
 // An ExternalClient observes, then either creates, updates, or deletes an
@@ -203,6 +216,18 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	svcCtx := service.NewServiceContext(ctx, c.localKube, c.logger, c.http, c.tlsConfigData)
 	crCtx := service.NewRequestCRContext(cr)
+
+	// Import / orphan-recovery: seed status.externalRef from crossplane.io/external-name
+	// if it is not yet populated.
+	if crCtx.Status().GetExternalRefValue() == "" {
+		if extName := meta.GetExternalName(cr); extName != "" {
+			crCtx.StatusWriter().SetExternalRef(extName)
+			if err := c.localKube.Status().Update(ctx, cr); err != nil {
+				return managed.ExternalObservation{}, errors.Wrap(err, "failed to seed externalRef from external-name annotation")
+			}
+		}
+	}
+
 	observeRequestDetails, err := request.IsUpToDate(svcCtx, crCtx)
 	if err != nil && err.Error() == observe.ErrObjectNotFound {
 		return managed.ExternalObservation{
@@ -212,6 +237,22 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	if err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, errFailedToCheckIfUpToDate)
+	}
+
+	// Terminal failure: report the resource unhealthy but up-to-date so the reconciler
+	// does not re-fire Create/Update. It stays in this state until the spec changes.
+	if observeRequestDetails.TerminalError != "" {
+		cr.Status.SetConditions(
+			xpv2.Unavailable().WithMessage(observeRequestDetails.TerminalError),
+			xpv2.ReconcileError(errors.New(observeRequestDetails.TerminalError)),
+		)
+		if updateErr := c.localKube.Status().Update(ctx, cr); updateErr != nil {
+			return managed.ExternalObservation{}, errors.Wrap(updateErr, " failed updating status")
+		}
+		return managed.ExternalObservation{
+			ResourceExists:   true,
+			ResourceUpToDate: true,
+		}, nil
 	}
 
 	statusHandler, err := statushandler.NewStatusHandler(svcCtx, crCtx, observeRequestDetails.Details, observeRequestDetails.ResponseError)

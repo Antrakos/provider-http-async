@@ -38,6 +38,12 @@ type ProviderConfigSpec struct {
 	// TLS configuration for HTTPS requests.
 	// +optional
 	TLS *common.TLSConfig `json:"tls,omitempty"`
+
+	// OIDC configures transparent workload-identity token exchange for outgoing
+	// HTTP calls. When set, tokens are resolved at call time from the pod's
+	// projected service account token; no credentials are stored in etcd.
+	// +optional
+	OIDC *common.OIDCConfig `json:"oidc,omitempty"`
 }
 
 // ProviderCredentials required to authenticate.

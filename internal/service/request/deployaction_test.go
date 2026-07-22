@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
+	"github.com/Antrakos/provider-http-async/apis/common"
 	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
 	"github.com/Antrakos/provider-http-async/internal/service"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -360,5 +361,231 @@ func TestDeployAction(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// ---- Async / polling-specific tests ----
+
+func crWithPolling(pollURL, operationRef string) *v1alpha2.AsyncRequest {
+	return &v1alpha2.AsyncRequest{
+		ObjectMeta: v1.ObjectMeta{Name: "test-request", Namespace: "testns"},
+		Spec: v1alpha2.AsyncRequestSpec{
+			ForProvider: v1alpha2.AsyncRequestParameters{
+				Payload: v1alpha2.Payload{
+					Body:    testBody,
+					BaseUrl: testURL,
+				},
+				ExternalRef: ".poll.response.body.id",
+				Mappings: []v1alpha2.Mapping{
+					{
+						Method: "POST",
+						Body:   ".payload.body",
+						URL:    ".payload.baseUrl",
+						Polling: &common.Polling{
+							URL:  pollURL,
+							Done: ".poll.response.body.done == true",
+						},
+					},
+				},
+			},
+		},
+		Status: v1alpha2.AsyncRequestStatus{Polling: v1alpha2.PollingStatus{OperationRef: operationRef}},
+	}
+}
+
+func mockKube() client.Client {
+	return &test.MockClient{
+		MockGet:          test.NewMockGetFn(nil),
+		MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+	}
+}
+
+func TestDeployAction_AsyncCreate_DoneAfterTwoPollIterations(t *testing.T) {
+	pollCalls := 0
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			if method == "POST" {
+				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+					StatusCode: 202,
+					Body:       `{"name": "operations/123"}`,
+				}}, nil
+			}
+			// Poll GET
+			pollCalls++
+			done := pollCalls >= 2
+			body2 := `{"done": false}`
+			if done {
+				body2 = `{"done": true, "id": "model-789"}`
+			}
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+				StatusCode: 200, Body: body2,
+			}}, nil
+		},
+	}
+
+	cr := crWithPolling(`"operations/123"`, "")
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	crCtx := service.NewRequestCRContext(cr)
+
+	err := DeployAction(svcCtx, crCtx, "CREATE")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pollCalls < 2 {
+		t.Errorf("expected at least 2 poll iterations, got %d", pollCalls)
+	}
+	if cr.Status.ExternalRef != "model-789" {
+		t.Errorf("expected externalRef=model-789, got %q", cr.Status.ExternalRef)
+	}
+	if cr.Status.Polling.OperationRef != "" {
+		t.Errorf("expected operationRef cleared, got %q", cr.Status.Polling.OperationRef)
+	}
+}
+
+func TestDeployAction_AsyncCreate_TerminalError(t *testing.T) {
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			if method == "POST" {
+				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+					StatusCode: 202, Body: `{"name": "operations/456"}`,
+				}}, nil
+			}
+			// Poll returns done=true with an error
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+				StatusCode: 200,
+				Body:       `{"done": true, "error": {"message": "quota exceeded"}}`,
+			}}, nil
+		},
+	}
+
+	cr := &v1alpha2.AsyncRequest{
+		ObjectMeta: v1.ObjectMeta{Name: "test-request", Namespace: "testns"},
+		Spec: v1alpha2.AsyncRequestSpec{
+			ForProvider: v1alpha2.AsyncRequestParameters{
+				Payload:  v1alpha2.Payload{Body: testBody, BaseUrl: testURL},
+				Mappings: []v1alpha2.Mapping{{
+					Method: "POST", Body: ".payload.body", URL: ".payload.baseUrl",
+					Polling: &common.Polling{
+						URL:   `"operations/456"`,
+						Done:  ".poll.response.body.done == true",
+						Error: ".poll.response.body.error",
+					},
+				}},
+			},
+		},
+	}
+
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	crCtx := service.NewRequestCRContext(cr)
+
+	err := DeployAction(svcCtx, crCtx, "CREATE")
+	// Terminal errors are written to status, not returned as Go errors
+	if err != nil {
+		t.Fatalf("expected nil error (terminal failure written to status), got: %v", err)
+	}
+}
+
+func TestDeployAction_CrashRecovery_SkipsMutate(t *testing.T) {
+	postCalled := false
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			if method == "POST" {
+				postCalled = true
+			}
+			// Resume poll GET — immediately done
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+				StatusCode: 200, Body: `{"done": true, "id": "model-789"}`,
+			}}, nil
+		},
+	}
+
+	// operationRef already set (simulates crash after first POST)
+	cr := crWithPolling(`"operations/123"`, "http://api/operations/123")
+	cr.Spec.ForProvider.ExternalRef = ".poll.response.body.id"
+
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	crCtx := service.NewRequestCRContext(cr)
+
+	err := DeployAction(svcCtx, crCtx, "CREATE")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if postCalled {
+		t.Error("POST (mutate) must NOT be called when operationRef is already set (crash recovery)")
+	}
+}
+
+func TestDeployAction_BackwardCompat_NoPollingNoOIDC(t *testing.T) {
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+				StatusCode: 201, Body: `{"id": "42"}`,
+			}}, nil
+		},
+	}
+
+	// Plain sync manifest — no polling, no oidc, no externalRef
+	cr := &v1alpha2.AsyncRequest{
+		ObjectMeta: v1.ObjectMeta{Name: "test-plain", Namespace: "testns"},
+		Spec: v1alpha2.AsyncRequestSpec{
+			ForProvider: v1alpha2.AsyncRequestParameters{
+				Payload:  v1alpha2.Payload{Body: testBody, BaseUrl: testURL},
+				Mappings: []v1alpha2.Mapping{{Method: "POST", Body: ".payload.body", URL: ".payload.baseUrl"}},
+			},
+		},
+	}
+
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	crCtx := service.NewRequestCRContext(cr)
+
+	err := DeployAction(svcCtx, crCtx, "CREATE")
+	if err != nil {
+		t.Fatalf("backward-compat: unexpected error: %v", err)
+	}
+	if cr.Status.Response.StatusCode != 201 {
+		t.Errorf("expected status 201, got %d", cr.Status.Response.StatusCode)
+	}
+}
+
+func TestDeployAction_OIDCHeaderInjected(t *testing.T) {
+	// Simulate an HTTP client that has already been wrapped with the OIDC decorator
+	// (NewOIDCClient) — here we verify that the injected Authorization header reaches
+	// the wire by inspecting what SendRequest received.
+	var capturedAuthHeader string
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			if hdrs, ok := headers.Decrypted.(map[string][]string); ok {
+				if vals := hdrs["Authorization"]; len(vals) > 0 {
+					capturedAuthHeader = vals[0]
+				}
+			}
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+				StatusCode: 200, Body: `{"id": "99"}`,
+			}}, nil
+		},
+	}
+
+	// Pre-inject the Authorization header as the OIDC decorator would
+	preSetHeaders := map[string][]string{"Authorization": {"Bearer oidc-token-xyz"}}
+	cr := &v1alpha2.AsyncRequest{
+		ObjectMeta: v1.ObjectMeta{Name: "test-oidc", Namespace: "testns"},
+		Spec: v1alpha2.AsyncRequestSpec{
+			ForProvider: v1alpha2.AsyncRequestParameters{
+				Payload:  v1alpha2.Payload{Body: testBody, BaseUrl: testURL},
+				Headers:  preSetHeaders,
+				Mappings: []v1alpha2.Mapping{{Method: "POST", Body: ".payload.body", URL: ".payload.baseUrl"}},
+			},
+		},
+	}
+
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	crCtx := service.NewRequestCRContext(cr)
+
+	err := DeployAction(svcCtx, crCtx, "CREATE")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedAuthHeader != "Bearer oidc-token-xyz" {
+		t.Errorf("expected Authorization: Bearer oidc-token-xyz, got %q", capturedAuthHeader)
 	}
 }

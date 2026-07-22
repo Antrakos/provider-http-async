@@ -78,6 +78,16 @@ func (r *AsyncRequestParameters) GetAllowedStatusCodes() []int {
 	return r.AllowedStatusCodes
 }
 
+// GetExternalRef returns the jq expression for extracting the stable external identifier.
+func (r *AsyncRequestParameters) GetExternalRef() string {
+	return r.ExternalRef
+}
+
+// GetOIDC returns the per-resource OIDC config override.
+func (r *AsyncRequestParameters) GetOIDC() *common.OIDCConfig {
+	return r.OIDC
+}
+
 // Ensure Mapping implements HTTPMapping
 var _ interfaces.HTTPMapping = (*Mapping)(nil)
 
@@ -109,6 +119,11 @@ func (m *Mapping) GetURL() string {
 // GetHeaders returns the headers for this mapping.
 func (m *Mapping) GetHeaders() map[string][]string {
 	return m.Headers
+}
+
+// GetPolling returns the polling configuration for this mapping, or nil if absent.
+func (m *Mapping) GetPolling() interfaces.PollingSpec {
+	return interfaces.NewPollingAdapter(m.Polling)
 }
 
 // Ensure Payload implements HTTPPayload
@@ -182,6 +197,37 @@ func (r *AsyncRequest) GetFailed() int32 {
 // GetRequestDetails returns the request details mapping.
 func (r *AsyncRequest) GetRequestDetails() interfaces.HTTPMapping {
 	return &r.Status.RequestDetails
+}
+
+// GetExternalRefValue returns the resolved status.externalRef.
+func (r *AsyncRequest) GetExternalRefValue() string {
+	return r.Status.ExternalRef
+}
+
+// GetOperationRef returns the in-flight operation URL from status.polling.operationRef.
+func (r *AsyncRequest) GetOperationRef() string {
+	return r.Status.Polling.OperationRef
+}
+
+// GetTerminalError returns the persisted terminal poll-failure message.
+func (r *AsyncRequest) GetTerminalError() string {
+	return r.Status.Polling.TerminalError
+}
+
+// GetObservedGeneration returns the generation at which the resource last reached a
+// ready or terminally-stalled state.
+func (r *AsyncRequest) GetObservedGeneration() int64 {
+	return r.Status.GetObservedGeneration()
+}
+
+// GetGeneration returns the current metadata.generation of the resource.
+func (r *AsyncRequest) GetGeneration() int64 {
+	return r.ObjectMeta.Generation
+}
+
+// GetOperationStartedAt returns the time the in-flight operation began polling.
+func (r *AsyncRequest) GetOperationStartedAt() *metav1.Time {
+	return r.Status.Polling.StartedAt
 }
 
 // Ensure AsyncRequest implements RequestResource

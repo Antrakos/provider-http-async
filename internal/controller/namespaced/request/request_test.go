@@ -3,13 +3,18 @@ package request
 import (
 	"context"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/Antrakos/provider-http-async/apis/common"
+	"github.com/Antrakos/provider-http-async/apis/interfaces"
 	"github.com/Antrakos/provider-http-async/apis/namespaced/request/v1alpha2"
 	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
+	"github.com/Antrakos/provider-http-async/internal/service"
+	"github.com/Antrakos/provider-http-async/internal/service/request"
+	"github.com/Antrakos/provider-http-async/internal/service/request/polling"
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/feature"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -969,6 +974,93 @@ func namespacedRequestWithMutualTLS() *v1alpha2.AsyncRequest {
 			},
 		}
 	})
+}
+
+// TestDeleteAsyncChain verifies the finalizer-hold contract for async deletes:
+// When operationRef is set and DeletionTimestamp is present:
+//  1. Observe returns ResourceExists=true, ResourceUpToDate=false (LRO still in flight)
+//  2. Delete returns nil (budget expired, operationRef retained, finalizer not removed)
+func TestDeleteAsyncChain(t *testing.T) {
+	const operationURL = "https://api.example.com/operations/op-123"
+
+	// Build a request with DeletionTimestamp and pre-set operationRef.
+	now := metav1.Now()
+	cr := namespacedRequest(
+		func(cr *v1alpha2.AsyncRequest) {
+			cr.DeletionTimestamp = &now
+			cr.Status.Polling.OperationRef = operationURL
+			cr.Status.ExternalRef = "models/my-model"
+			cr.Finalizers = []string{"finalizer.managedresource.crossplane.io"}
+			// Add a REMOVE mapping so DeployAction can find it.
+			interval := metav1.Duration{Duration: 100 * time.Millisecond}
+			timeout := metav1.Duration{Duration: 5 * time.Second}
+			cr.Spec.ForProvider.Mappings = append(cr.Spec.ForProvider.Mappings, v1alpha2.Mapping{
+				Method: "DELETE",
+				Action: "REMOVE",
+				URL:    `"https://api.example.com/models/my-model"`,
+				Polling: &common.Polling{
+					URL:      `"` + operationURL + `"`,
+					Interval: &interval,
+					Timeout:  &timeout,
+					Done:     ".poll.response.body.done == true",
+				},
+			})
+		},
+	)
+
+	localKube := &test.MockClient{
+		MockGet:          test.NewMockGetFn(nil),
+		MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+	}
+
+	e := &external{
+		logger:    logging.NewNopLogger(),
+		localKube: localKube,
+		http:      nil, // not called: operationRef path skips the mutate HTTP call
+	}
+
+	t.Run("ObserveWithOperationRefReturnsNotUpToDate", func(t *testing.T) {
+		got, err := e.Observe(context.Background(), cr)
+		if err != nil {
+			t.Fatalf("Observe(): unexpected error: %v", err)
+		}
+		if !got.ResourceExists {
+			t.Errorf("Observe(): want ResourceExists=true, got false")
+		}
+		if got.ResourceUpToDate {
+			t.Errorf("Observe(): want ResourceUpToDate=false, got true")
+		}
+	})
+
+	t.Run("DeleteWithDoneEqualsFalseReturnsNil", func(t *testing.T) {
+		// mockPoller returns Done=false, simulating budget expiry while LRO is still running.
+		mockPoller := &mockPollerNotDone{operationURL: operationURL}
+
+		// Wire the mock poller via the service-layer function instead of the controller,
+		// because the controller's Delete() does not accept a poller injection. We test
+		// the service layer directly, which is what Delete() delegates to.
+		svcCtx := service.NewServiceContext(context.Background(), localKube, logging.NewNopLogger(), nil, nil)
+		crCtx := service.NewRequestCRContext(cr)
+		err := request.DeployAction(svcCtx, crCtx, v1alpha2.ActionRemove, mockPoller)
+		if err != nil {
+			t.Errorf("DeployAction(REMOVE, notDone): want nil error to hold finalizer, got: %v", err)
+		}
+	})
+}
+
+// mockPollerNotDone simulates a poller that reports the operation is still running.
+type mockPollerNotDone struct {
+	operationURL string
+}
+
+func (m *mockPollerNotDone) Poll(
+	_ *service.ServiceContext,
+	_ *service.RequestCRContext,
+	_ interfaces.HTTPMapping,
+	_ map[string]interface{},
+	_ string,
+) (polling.Result, error) {
+	return polling.Result{Done: false, OperationURL: m.operationURL}, nil
 }
 
 func TestObserve_DeletionMonitoring(t *testing.T) {

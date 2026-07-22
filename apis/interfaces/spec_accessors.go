@@ -17,11 +17,53 @@ limitations under the License.
 package interfaces
 
 import (
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/Antrakos/provider-http-async/apis/common"
 )
+
+// PollingSpec exposes polling configuration for a mapping with defaults applied.
+type PollingSpec interface {
+	GetURL() string
+	GetDone() string
+	GetError() string
+	GetTimeout() time.Duration
+	GetInterval() time.Duration
+}
+
+// PollingAdapter wraps *common.Polling and applies defaults when fields are absent.
+type PollingAdapter struct {
+	p *common.Polling
+}
+
+// NewPollingAdapter returns nil when p is nil so callers can check existence.
+func NewPollingAdapter(p *common.Polling) PollingSpec {
+	if p == nil {
+		return nil
+	}
+	return &PollingAdapter{p: p}
+}
+
+func (a *PollingAdapter) GetURL() string   { return a.p.URL }
+func (a *PollingAdapter) GetDone() string  { return a.p.Done }
+func (a *PollingAdapter) GetError() string { return a.p.Error }
+
+func (a *PollingAdapter) GetTimeout() time.Duration {
+	if a.p.Timeout != nil {
+		return a.p.Timeout.Duration
+	}
+	return common.DefaultPollTimeout
+}
+
+func (a *PollingAdapter) GetInterval() time.Duration {
+	if a.p.Interval != nil {
+		return a.p.Interval.Duration
+	}
+	return common.DefaultPollInterval
+}
 
 // HTTPRequestSpec defines the common interface for accessing HTTP request configuration.
 // This interface abstracts the differences between AsyncRequest and DisposableRequest types.
@@ -73,6 +115,12 @@ type MappedHTTPRequestSpec interface {
 
 	// GetAllowedStatusCodes returns the HTTP status codes that should not be treated as errors.
 	GetAllowedStatusCodes() []int
+
+	// GetExternalRef returns the jq expression that extracts the stable external identifier.
+	GetExternalRef() string
+
+	// GetOIDC returns the per-resource OIDC config override; may be nil.
+	GetOIDC() *common.OIDCConfig
 }
 
 // HTTPMapping represents a single HTTP mapping configuration.
@@ -95,6 +143,9 @@ type HTTPMapping interface {
 
 	// GetHeaders returns the headers for this mapping.
 	GetHeaders() map[string][]string
+
+	// GetPolling returns the polling configuration for this mapping, or nil if absent.
+	GetPolling() PollingSpec
 }
 
 // HTTPPayload represents the payload configuration.
@@ -221,6 +272,26 @@ type RequestStatusReader interface {
 
 	// GetRequestDetails returns the request details mapping.
 	GetRequestDetails() HTTPMapping
+
+	// GetExternalRefValue returns the resolved status.externalRef.
+	GetExternalRefValue() string
+
+	// GetOperationRef returns the in-flight operation URL from status.operationRef.
+	GetOperationRef() string
+
+	// GetTerminalError returns the persisted terminal poll-failure message, or "" if
+	// the resource is not in a terminal failure state.
+	GetTerminalError() string
+
+	// GetObservedGeneration returns the metadata.generation at which the resource last
+	// reached a ready or terminally-stalled state.
+	GetObservedGeneration() int64
+
+	// GetGeneration returns the current metadata.generation of the resource.
+	GetGeneration() int64
+
+	// GetOperationStartedAt returns the time the in-flight operation began polling, or nil.
+	GetOperationStartedAt() *metav1.Time
 }
 
 // RequestStatusWriter provides write access to AsyncRequest status fields.
@@ -232,6 +303,25 @@ type RequestStatusWriter interface {
 
 	// ResetFailures resets the failure count.
 	ResetFailures()
+
+	// SetExternalRef writes the resolved external identifier to status.
+	SetExternalRef(ref string)
+
+	// SetOperationRef writes (or clears) the in-flight operation URL in status.
+	SetOperationRef(ref string)
+
+	// SetTerminalError persists (or clears, when passed "") the terminal poll-failure
+	// message. It does not increment the failure counter — a terminal failure is a
+	// stable state, not a transient retry.
+	SetTerminalError(msg string)
+
+	// SetObservedGeneration records the metadata.generation at which the resource
+	// reached a ready or terminally-stalled state.
+	SetObservedGeneration(generation int64)
+
+	// SetOperationStartedAt records the time the in-flight operation began polling.
+	// Pass nil to clear it.
+	SetOperationStartedAt(t *metav1.Time)
 }
 
 // AsyncRequestStatus combines read and write access to AsyncRequest status.

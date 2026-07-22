@@ -1,0 +1,61 @@
+apiVersion: http.async.m.crossplane.io/v1alpha2
+kind: AsyncRequest
+metadata:
+  name: my-vertex-model
+  namespace: my-team
+spec:
+  providerConfigRef:
+    name: vertex-ai-gcp
+    kind: ProviderConfig
+  forProvider:
+    payload:
+      baseUrl: https://us-central1-aiplatform.googleapis.com/v1beta1/projects/my-project/locations/us-central1
+      body: |
+        {
+          "model": {
+            "displayName": "my-model",
+            "containerSpec": {
+              "imageUri": "us-docker.pkg.dev/my-project/my-repo/my-model:v1",
+              "args": ["--port=8080"],
+              "predictRoute": "/predict",
+              "healthRoute": "/health"
+            }
+          }
+        }
+
+    externalRef: '.poll.response.body.response.model | split("/") | last'
+
+    mappings:
+      - action: CREATE
+        method: POST
+        url: '.payload.baseUrl + "/models:upload"'
+        body: .payload.body
+        polling:
+          url: .response.body.name
+          done: .poll.response.body.done == true
+          error: .poll.response.body.error
+          timeout: 30m
+          interval: 5s
+
+      - action: OBSERVE
+        method: GET
+        url: '.payload.baseUrl + "/models/" + .status.externalRef'
+
+      - action: UPDATE
+        method: PATCH
+        url: '.payload.baseUrl + "/models/" + .status.externalRef'
+        body: '{"displayName": .payload.body.model.displayName}'
+
+      - action: REMOVE
+        method: DELETE
+        url: '.payload.baseUrl + "/models/" + .status.externalRef'
+        polling:
+          url: .response.body.name
+          done: .poll.response.body.done == true
+          error: .poll.response.body.error
+          timeout: 10m
+
+    expectedResponseCheck:
+      type: CUSTOM
+      logic: |
+        .response.body.displayName == .payload.body.model.displayName

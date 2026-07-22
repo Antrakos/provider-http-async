@@ -19,7 +19,6 @@ package interfaces_test
 import (
 	"testing"
 
-	clusterrequestv1alpha1 "github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha1"
 	clusterrequestv1alpha2 "github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
 	namespacedrequestv1alpha2 "github.com/Antrakos/provider-http-async/apis/namespaced/request/v1alpha2"
 
@@ -28,16 +27,9 @@ import (
 
 func TestClusterScopedInterfaceImplementations(t *testing.T) {
 	var _ interfaces.MappedHTTPRequestSpec = (*clusterrequestv1alpha2.AsyncRequestParameters)(nil)
-	var _ interfaces.MappedHTTPRequestSpec = (*clusterrequestv1alpha1.AsyncRequestParameters)(nil)
-
 	var _ interfaces.HTTPResponse = (*clusterrequestv1alpha2.Response)(nil)
-	var _ interfaces.HTTPResponse = (*clusterrequestv1alpha1.Response)(nil)
-
 	var _ interfaces.HTTPMapping = (*clusterrequestv1alpha2.Mapping)(nil)
-	var _ interfaces.HTTPMapping = (*clusterrequestv1alpha1.Mapping)(nil)
-
 	var _ interfaces.HTTPPayload = (*clusterrequestv1alpha2.Payload)(nil)
-	var _ interfaces.HTTPPayload = (*clusterrequestv1alpha1.Payload)(nil)
 }
 
 func TestNamespacedInterfaceImplementations(t *testing.T) {

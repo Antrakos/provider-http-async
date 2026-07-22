@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.18.0
+    controller-gen.kubebuilder.io/version: v0.20.0
   name: clusterproviderconfigs.http.async.m.crossplane.io
 spec:
   group: http.async.m.crossplane.io
@@ -103,6 +103,63 @@ spec:
                     type: string
                 required:
                 - source
+                type: object
+              oidc:
+                description: |-
+                  OIDC configures transparent workload-identity token exchange for outgoing
+                  HTTP calls. When set, tokens are resolved at call time from the pod's
+                  projected service account token; no credentials are stored in etcd.
+                properties:
+                  exchange:
+                    description: Exchange configures the OIDC token exchange endpoint.
+                    properties:
+                      audience:
+                        description: Audience is the intended audience for the exchanged
+                          token.
+                        type: string
+                      extraParams:
+                        additionalProperties:
+                          type: string
+                        description: ExtraParams are provider-specific key-value pairs
+                          appended to the exchange request.
+                        type: object
+                      tokenEndpoint:
+                        description: TokenEndpoint is the OIDC STS token exchange
+                          URL.
+                        type: string
+                    required:
+                    - audience
+                    - tokenEndpoint
+                    type: object
+                  inject:
+                    description: Inject controls how the resolved token is attached
+                      to outgoing HTTP calls.
+                    properties:
+                      header:
+                        description: Header is the HTTP header name used when Type
+                          is "header".
+                        type: string
+                      prefix:
+                        description: Prefix is prepended to the token value when Type
+                          is "header" (e.g. "Bearer ").
+                        type: string
+                      type:
+                        default: header
+                        description: Type selects the injection strategy.
+                        enum:
+                        - header
+                        type: string
+                    type: object
+                  refreshBefore:
+                    description: |-
+                      RefreshBefore causes the provider to re-exchange the SA token this long before
+                      the cached token's exp claim. Defaults to 5m.
+                    type: string
+                  serviceAccountTokenPath:
+                    description: |-
+                      ServiceAccountTokenPath is the path to the projected SA token volume.
+                      Defaults to /var/run/secrets/kubernetes.io/serviceaccount/token.
+                    type: string
                 type: object
               tls:
                 description: TLS configuration for HTTPS requests.
