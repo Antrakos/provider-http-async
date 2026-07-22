@@ -111,7 +111,7 @@ formatters:
       simplify: true
     goimports:
       local-prefixes:
-        - github.com/crossplane/provider-template
+        - github.com/Antrakos/provider-http-async
   exclusions:
     generated: lax
     paths:
