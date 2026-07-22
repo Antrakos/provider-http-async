@@ -1,4 +1,4 @@
-module github.com/crossplane/provider-template
+module github.com/Antrakos/provider-http-async
 
 go 1.25.11
 

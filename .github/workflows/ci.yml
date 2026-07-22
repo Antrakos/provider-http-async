@@ -5,19 +5,19 @@ on:
     branches:
       - main
       - release-*
+    tags:
+      - 'v*'
   pull_request: {}
   workflow_dispatch: {}
 
 env:
-  # Common versions
   GO_VERSION: '1.25.11'
-  GOLANGCI_VERSION: 'v2.12.2'
   DOCKER_BUILDX_VERSION: 'v0.23.0'
+  CROSSPLANE_CLI_VERSION: 'v2.3.1'
 
-  # Common users. We can't run a step 'if secrets.XXX != ""' but we can run a
-  # step 'if env.XXX' != ""', so we copy these to succinctly test whether
-  # credentials have been provided before trying to run steps that need them.
-  UPBOUND_MARKETPLACE_PUSH_ROBOT_USR: ${{ secrets.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR }}
+  # The package to push, without a version tag. Published to GHCR.
+  XPKG: ghcr.io/${{ github.repository }}
+
 jobs:
   detect-noop:
     runs-on: ubuntu-22.04
@@ -32,93 +32,43 @@ jobs:
           paths_ignore: '["**.md", "**.png", "**.jpg"]'
           do_not_skip: '["workflow_dispatch", "schedule", "push"]'
 
-
   lint:
     runs-on: ubuntu-22.04
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true'
-
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: true
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Setup Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Find the Go Build Cache
-        id: go
-        run: echo "cachedir=$(make go.cachedir)" >> $GITHUB_ENV
+      - name: Check go mod tidy
+        run: go mod tidy && git diff --exit-code go.mod go.sum
 
-      - name: Cache the Go Build Cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ env.cachedir }}
-          key: ${{ runner.os }}-build-lint-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-build-lint-
-
-      - name: Cache Go Dependencies
-        uses: actions/cache@v5
-        with:
-          path: .work/pkg
-          key: ${{ runner.os }}-pkg-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-pkg-
-
-      - name: Download Go Modules
-        run: make modules.download modules.check
-
-      # We could run 'make lint' but we prefer this action because it leaves
-      # 'annotations' (i.e. it comments on PRs to point out linter violations).
       - name: Lint
         uses: golangci/golangci-lint-action@v7
         with:
-          version: ${{ env.GOLANGCI_VERSION }}
+          version: v2.12.2
 
   check-diff:
     runs-on: ubuntu-22.04
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true'
-
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: true
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Setup Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Find the Go Build Cache
-        id: go
-        run: echo "cachedir=$(make go.cachedir)" >> $GITHUB_ENV
-
-      - name: Cache the Go Build Cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ env.cachedir }}
-          key: ${{ runner.os }}-build-check-diff-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-build-check-diff-
-
-      - name: Cache Go Dependencies
-        uses: actions/cache@v5
-        with:
-          path: .work/pkg
-          key: ${{ runner.os }}-pkg-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-pkg-
-
-      - name: Download Go Modules
-        run: make modules.download modules.check
-
-      - name: Check Diff
+      - name: Check generated code is up to date
         id: check-diff
-        run: |
-          mkdir _output
-          make check-diff
+        run: go generate ./... && git diff --exit-code
 
       - name: Show diff
         if: failure() && steps.check-diff.outcome == 'failure'
@@ -128,44 +78,17 @@ jobs:
     runs-on: ubuntu-22.04
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true'
-
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: true
-
-      - name: Fetch History
-        run: git fetch --prune --unshallow
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Setup Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Find the Go Build Cache
-        id: go
-        run: echo "cachedir=$(make go.cachedir)" >> $GITHUB_ENV
-
-      - name: Cache the Go Build Cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ env.cachedir }}
-          key: ${{ runner.os }}-build-unit-tests-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-build-unit-tests-
-
-      - name: Cache Go Dependencies
-        uses: actions/cache@v5
-        with:
-          path: .work/pkg
-          key: ${{ runner.os }}-pkg-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-pkg-
-
-      - name: Download Go Modules
-        run: make modules.download modules.check
-
       - name: Run Unit Tests
-        run: make -j2 test
+        run: go test -v -cover ./...
 
       - name: Publish Unit Test Coverage
         uses: codecov/codecov-action@v3
@@ -173,11 +96,17 @@ jobs:
           flags: unittests
           file: _output/tests/linux_amd64/coverage.txt
 
-  publish-artifacts:
+  # Build single-platform packages in parallel, then merge into a multi-platform push.
+  build:
     runs-on: ubuntu-22.04
     needs: detect-noop
     if: needs.detect-noop.outputs.noop != 'true'
-
+    strategy:
+      fail-fast: true
+      matrix:
+        arch:
+          - amd64
+          - arm64
     steps:
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v2
@@ -185,66 +114,112 @@ jobs:
           platforms: all
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
         with:
           version: ${{ env.DOCKER_BUILDX_VERSION }}
-          install: true
-
-      - name: Login to Upbound
-        uses: docker/login-action@v1
-        if: env.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR != ''
-        with:
-          registry: xpkg.upbound.io
-          username: ${{ secrets.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR }}
-          password: ${{ secrets.UPBOUND_MARKETPLACE_PUSH_ROBOT_PSW }}
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Build Runtime
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
-          submodules: true
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          target: image
+          build-args: |
+            GO_VERSION=${{ env.GO_VERSION }}
+          outputs: type=docker,dest=runtime-${{ matrix.arch }}.tar
 
-      - name: Fetch History
-        run: git fetch --prune --unshallow
+      - name: Setup the Crossplane CLI
+        run: 'curl -sfL https://cli.crossplane.io/install.sh | XP_VERSION=${{ env.CROSSPLANE_CLI_VERSION }} sh'
 
-      - name: Setup Go
-        uses: actions/setup-go@v3
+      - name: Build Package
+        run: ./crossplane xpkg build --package-file=${{ matrix.arch }}.xpkg --package-root=package/ --embed-runtime-image-tarball=runtime-${{ matrix.arch }}.tar
+
+      - name: Upload Single-Platform Package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          go-version: ${{ env.GO_VERSION }}
+          name: package-${{ matrix.arch }}
+          path: "*.xpkg"
+          if-no-files-found: error
+          retention-days: 1
 
-      - name: Find the Go Build Cache
-        id: go
-        run: echo "cachedir=$(make go.cachedir)" >> $GITHUB_ENV
+  # Download single-platform packages and push as a multi-platform package.
+  push:
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+    needs:
+      - build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      - name: Cache the Go Build Cache
-        uses: actions/cache@v5
+      - name: Download Single-Platform Packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: ${{ env.cachedir }}
-          key: ${{ runner.os }}-build-publish-artifacts-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-build-publish-artifacts-
+          pattern: "!*.dockerbuild"
+          path: .
+          merge-multiple: true
 
-      - name: Cache Go Dependencies
-        uses: actions/cache@v5
+      - name: Setup the Crossplane CLI
+        run: 'curl -sfL https://cli.crossplane.io/install.sh | XP_VERSION=${{ env.CROSSPLANE_CLI_VERSION }} sh'
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
-          path: .work/pkg
-          key: ${{ runner.os }}-pkg-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-pkg-
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download Go Modules
-        run: make modules.download modules.check
+      - name: Set Multi-Platform Package Version
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "XPKG_VERSION=${{ github.ref_name }}" >> "$GITHUB_ENV"
+          else
+            echo "XPKG_VERSION=v0.0.0-$(date -d@$(git show -s --format=%ct) +%Y%m%d%H%M%S)-$(git rev-parse --short=12 HEAD)" >> "$GITHUB_ENV"
+          fi
 
-      - name: Build Artifacts
-        run: make -j2 build.all
+      - name: Push Multi-Platform Package to GitHub Container Registry
+        run: "./crossplane --verbose xpkg push --package-files $(echo *.xpkg|tr ' ' ,) ${XPKG@L}:${{ env.XPKG_VERSION }}"
+
+  # Create a GitHub Release on v* tag pushes.
+  release:
+    if: ${{ github.ref_type == 'tag' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    needs:
+      - push
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Generate Release Notes
+        id: notes
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+
+      - name: Create GitHub Release
         env:
-          # We're using docker buildx, which doesn't actually load the images it
-          # builds by default. Specifying --load does so.
-          BUILD_ARGS: "--load"
-
-      - name: Publish Artifacts to GitHub
-        uses: actions/upload-artifact@v4
-        with:
-          name: output
-          path: _output/**
-
-      - name: Publish Artifacts
-        if: env.UPBOUND_MARKETPLACE_PUSH_ROBOT_USR != ''
-        run: make publish BRANCH_NAME=${GITHUB_REF##*/}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            cat "${{ steps.notes.outputs.changelog }}"
+            echo
+            echo "**Package:** \`${XPKG@L}:${{ github.ref_name }}\`"
+            echo "**Full Changelog:** ${{ github.server_url }}/${{ github.repository }}/commits/${{ github.ref_name }}"
+          } > release-notes.md
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --verify-tag \
+            --notes-file release-notes.md

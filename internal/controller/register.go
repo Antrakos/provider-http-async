@@ -20,8 +20,8 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	"github.com/crossplane/provider-template/internal/controller/config"
-	"github.com/crossplane/provider-template/internal/controller/mytype"
+	"github.com/Antrakos/provider-http-async/internal/controller/config"
+	"github.com/Antrakos/provider-http-async/internal/controller/mytype"
 )
 
 // SetupGated creates all Template controllers with safe-start support and adds them to

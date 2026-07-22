@@ -35,8 +35,8 @@ import (
 
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
-	"github.com/crossplane/provider-template/apis/sample/v1alpha1"
-	apisv1alpha1 "github.com/crossplane/provider-template/apis/v1alpha1"
+	"github.com/Antrakos/provider-http-async/apis/sample/v1alpha1"
+	apisv1alpha1 "github.com/Antrakos/provider-http-async/apis/v1alpha1"
 )
 
 const (

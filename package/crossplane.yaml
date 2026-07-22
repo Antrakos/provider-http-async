@@ -1,13 +1,13 @@
 apiVersion: meta.pkg.crossplane.io/v1alpha1
 kind: Provider
 metadata:
-  name: provider-template
+  name: provider-http-async
   annotations:
-    meta.crossplane.io/maintainer: Crossplane Maintainers <info@crossplane.io>
-    meta.crossplane.io/source: github.com/crossplane/provider-template
+    meta.crossplane.io/maintainer: Taras Zubrei
+    meta.crossplane.io/source: github.com/Antrakos/provider-http-async
     meta.crossplane.io/license: Apache-2.0
     meta.crossplane.io/description: |
-      A template that can be used to create Crossplane providers.
+      A Crossplane provider for asynchronous HTTP requests.
 spec:
   capabilities:
     - safe-start

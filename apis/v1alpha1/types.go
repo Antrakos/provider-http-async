@@ -41,7 +41,7 @@ type ProviderConfigSpec struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:printcolumn:name="SECRET-NAME",type="string",JSONPath=".spec.credentials.secretRef.name",priority=1
-// +kubebuilder:resource:scope=Namespaced,categories={crossplane,provider,template}
+// +kubebuilder:resource:scope=Namespaced,categories={crossplane,provider,http-async}
 // A ProviderConfig configures a Helm 'provider', i.e. a connection to a particular
 type ProviderConfig struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -67,7 +67,7 @@ type ProviderConfigList struct {
 // +kubebuilder:printcolumn:name="CONFIG-NAME",type="string",JSONPath=".providerConfigRef.name"
 // +kubebuilder:printcolumn:name="RESOURCE-KIND",type="string",JSONPath=".resourceRef.kind"
 // +kubebuilder:printcolumn:name="RESOURCE-NAME",type="string",JSONPath=".resourceRef.name"
-// +kubebuilder:resource:scope=Namespaced,categories={crossplane,provider,template}
+// +kubebuilder:resource:scope=Namespaced,categories={crossplane,provider,http-async}
 // A ProviderConfigUsage indicates that a resource is using a ProviderConfig.
 type ProviderConfigUsage struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -90,7 +90,7 @@ type ProviderConfigUsageList struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:printcolumn:name="SECRET-NAME",type="string",JSONPath=".spec.credentials.secretRef.name",priority=1
-// +kubebuilder:resource:scope=Cluster,categories={crossplane,provider,template}
+// +kubebuilder:resource:scope=Cluster,categories={crossplane,provider,http-async}
 // A ClusterProviderConfig configures a Template provider.
 type ClusterProviderConfig struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -116,7 +116,7 @@ type ClusterProviderConfigList struct {
 // +kubebuilder:printcolumn:name="CONFIG-NAME",type="string",JSONPath=".providerConfigRef.name"
 // +kubebuilder:printcolumn:name="RESOURCE-KIND",type="string",JSONPath=".resourceRef.kind"
 // +kubebuilder:printcolumn:name="RESOURCE-NAME",type="string",JSONPath=".resourceRef.name"
-// +kubebuilder:resource:scope=Cluster,categories={crossplane,provider,template}
+// +kubebuilder:resource:scope=Cluster,categories={crossplane,provider,http-async}
 // A ClusterProviderConfigUsage indicates that a resource is using a ClusterProviderConfig.
 type ClusterProviderConfigUsage struct {
 	metav1.TypeMeta   `json:",inline"`
