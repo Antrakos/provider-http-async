@@ -145,7 +145,8 @@ spec:
                         type: string
                       type:
                         default: header
-                        description: Type selects the injection strategy.
+                        description: Type selects the injection strategy. Currently
+                          only "header" is supported.
                         enum:
                         - header
                         type: string

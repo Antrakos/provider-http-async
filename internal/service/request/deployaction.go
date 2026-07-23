@@ -1,6 +1,11 @@
 package request
 
 import (
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
+
 	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
 	datapatcher "github.com/Antrakos/provider-http-async/internal/data-patcher"
 	"github.com/Antrakos/provider-http-async/internal/jq"
@@ -10,16 +15,12 @@ import (
 	"github.com/Antrakos/provider-http-async/internal/service/request/requestgen"
 	"github.com/Antrakos/provider-http-async/internal/service/request/requestmapping"
 	"github.com/Antrakos/provider-http-async/internal/service/request/statushandler"
-	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
-	"github.com/pkg/errors"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/util/retry"
 )
 
 // DeployAction executes the action based on the given AsyncRequest resource and Mapping configuration.
 // poller may be nil; polling.New() is used in that case.
 func DeployAction(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext, action string, poller ...polling.Poller) error {
-	p := polling.Poller(polling.New())
+	p := polling.New()
 	if len(poller) > 0 && poller[0] != nil {
 		p = poller[0]
 	}
@@ -173,7 +174,7 @@ func extractExternalRefInto(svcCtx *service.ServiceContext, crCtx *service.Reque
 		jqCtx := buildExternalRefJQCtx(crCtx.Status(), mutateResp, pollResp)
 		value, err := jq.ParseString(exprJQ, jqCtx)
 		if err != nil || value == "" {
-			return nil
+			return nil //nolint:nilerr // intentionally skip if jq returns empty
 		}
 		crCtx.StatusWriter().SetExternalRef(value)
 		return svcCtx.LocalKube.Status().Update(svcCtx.Ctx, resource)
@@ -204,4 +205,3 @@ func buildExternalRefJQCtx(
 	json_util.ConvertJSONStringsToMaps(&ctx)
 	return ctx
 }
-

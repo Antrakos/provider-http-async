@@ -22,9 +22,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/Antrakos/provider-http-async/apis/common"
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 
+	"github.com/Antrakos/provider-http-async/apis/common"
 )
 
 const (
@@ -149,11 +149,11 @@ type Response struct {
 // A AsyncRequestStatus represents the observed state of an AsyncRequest.
 type AsyncRequestStatus struct {
 	xpv2.ManagedResourceStatus `json:",inline"`
-	Response            Response `json:"response,omitempty"`
-	Cache               Cache    `json:"cache,omitempty"`
-	Failed              int32    `json:"failed,omitempty"`
-	Error               string   `json:"error,omitempty"`
-	RequestDetails      Mapping  `json:"requestDetails,omitempty"`
+	Response                   Response `json:"response,omitempty"`
+	Cache                      Cache    `json:"cache,omitempty"`
+	Failed                     int32    `json:"failed,omitempty"`
+	Error                      string   `json:"error,omitempty"`
+	RequestDetails             Mapping  `json:"requestDetails,omitempty"`
 
 	// ExternalRef is the stable external identifier extracted after the first
 	// successful CREATE+poll cycle (or seeded from crossplane.io/external-name on

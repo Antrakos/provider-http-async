@@ -4,9 +4,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Antrakos/provider-http-async/apis/common"
 	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/Antrakos/provider-http-async/apis/common"
 )
 
 func TestRequestParameters_Accessors(t *testing.T) {

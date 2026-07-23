@@ -3,9 +3,10 @@ package utils
 import (
 	"context"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	"github.com/Antrakos/provider-http-async/apis/interfaces"
 	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (

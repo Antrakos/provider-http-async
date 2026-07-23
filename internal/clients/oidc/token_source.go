@@ -30,9 +30,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Antrakos/provider-http-async/apis/common"
 	"github.com/pkg/errors"
 	"golang.org/x/oauth2"
+
+	"github.com/Antrakos/provider-http-async/apis/common"
 )
 
 // New returns an oauth2.TokenSource that performs RFC 8693 token exchange using

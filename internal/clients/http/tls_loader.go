@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Antrakos/provider-http-async/apis/common"
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kube "sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/Antrakos/provider-http-async/apis/common"
 )
 
 // LoadTLSConfig loads TLS configuration from secrets and returns TLSConfigData

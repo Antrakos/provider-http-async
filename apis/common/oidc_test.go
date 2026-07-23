@@ -49,11 +49,11 @@ func TestMergeOIDCConfigs_OverrideNil(t *testing.T) {
 func TestMergeOIDCConfigs_OverrideTakesPrecedence(t *testing.T) {
 	base := &OIDCConfig{
 		ServiceAccountTokenPath: "/base",
-		Exchange: &OIDCExchange{TokenEndpoint: "base-endpoint", Audience: "base-aud"},
+		Exchange:                &OIDCExchange{TokenEndpoint: "base-endpoint", Audience: "base-aud"},
 	}
 	override := &OIDCConfig{
 		ServiceAccountTokenPath: "/override",
-		Exchange: &OIDCExchange{TokenEndpoint: "override-endpoint", Audience: "override-aud"},
+		Exchange:                &OIDCExchange{TokenEndpoint: "override-endpoint", Audience: "override-aud"},
 	}
 	got := MergeOIDCConfigs(override, base)
 	if got.ServiceAccountTokenPath != "/override" {
@@ -67,7 +67,7 @@ func TestMergeOIDCConfigs_OverrideTakesPrecedence(t *testing.T) {
 func TestMergeOIDCConfigs_BaseFillsGaps(t *testing.T) {
 	base := &OIDCConfig{
 		ServiceAccountTokenPath: "/base",
-		Inject: &OIDCInject{Header: "X-Token"},
+		Inject:                  &OIDCInject{Header: "X-Token"},
 	}
 	override := &OIDCConfig{
 		// No ServiceAccountTokenPath, no Inject — base should fill in

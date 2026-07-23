@@ -6,13 +6,14 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
-	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
-	"github.com/Antrakos/provider-http-async/internal/service"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/test"
 	"github.com/google/go-cmp/cmp"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
+	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
+	"github.com/Antrakos/provider-http-async/internal/service"
 )
 
 var (

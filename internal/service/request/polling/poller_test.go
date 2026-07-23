@@ -9,15 +9,16 @@ import (
 	"testing"
 	"time"
 
-	clusterv1alpha2 "github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
-	"github.com/Antrakos/provider-http-async/apis/common"
-	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
-	"github.com/Antrakos/provider-http-async/internal/service"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+
+	clusterv1alpha2 "github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
+	"github.com/Antrakos/provider-http-async/apis/common"
+	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
+	"github.com/Antrakos/provider-http-async/internal/service"
 )
 
 // operationServer returns a test server that reports done after n calls.

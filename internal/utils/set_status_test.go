@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/pkg/errors"
+
 	v1alpha1_request "github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
 	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
-	"github.com/pkg/errors"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/test"
 	"github.com/google/go-cmp/cmp"

@@ -3,11 +3,12 @@ package observe
 import (
 	"net/http"
 
+	"github.com/pkg/errors"
+
 	"github.com/Antrakos/provider-http-async/apis/common"
 	"github.com/Antrakos/provider-http-async/apis/interfaces"
 	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
 	"github.com/Antrakos/provider-http-async/internal/service"
-	"github.com/pkg/errors"
 )
 
 const (

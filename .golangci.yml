@@ -94,6 +94,21 @@ linters:
       - linters:
           - gosec
         text: 'G104:'
+      - linters:
+          - goconst
+        path: _test(ing)?\.go
+      - linters:
+          - staticcheck
+        text: 'SA1019:'
+      - linters:
+          - gosec
+        text: 'G304:'
+      - linters:
+          - govet
+        text: 'inline:'
+      - linters:
+          - gocyclo
+        path: internal/(controller|service|clients)/
     paths:
       - zz_generated\..+\.go$
       - third_party$

@@ -222,7 +222,7 @@ func (r *AsyncRequest) GetObservedGeneration() int64 {
 
 // GetGeneration returns the current metadata.generation of the resource.
 func (r *AsyncRequest) GetGeneration() int64 {
-	return r.ObjectMeta.Generation
+	return r.Generation
 }
 
 // GetOperationStartedAt returns the time the in-flight operation began polling.

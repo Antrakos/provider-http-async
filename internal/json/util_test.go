@@ -3,8 +3,9 @@ package json
 import (
 	"testing"
 
-	"github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
 )
 
 var (

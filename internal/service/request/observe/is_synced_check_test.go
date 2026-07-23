@@ -4,14 +4,15 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
-	"github.com/Antrakos/provider-http-async/apis/common"
-	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
-	"github.com/Antrakos/provider-http-async/internal/service"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/test"
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/errors"
+
+	"github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
+	"github.com/Antrakos/provider-http-async/apis/common"
+	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
+	"github.com/Antrakos/provider-http-async/internal/service"
 )
 
 var (

@@ -3,14 +3,15 @@ package datapatcher
 import (
 	"testing"
 
-	"github.com/Antrakos/provider-http-async/apis/common"
-	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
-	json_util "github.com/Antrakos/provider-http-async/internal/json"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
+
+	"github.com/Antrakos/provider-http-async/apis/common"
+	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
+	json_util "github.com/Antrakos/provider-http-async/internal/json"
 )
 
 func TestIsSecretDataUpToDate(t *testing.T) {

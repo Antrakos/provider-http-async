@@ -1,8 +1,9 @@
 package service
 
 import (
-	"github.com/Antrakos/provider-http-async/apis/interfaces"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/Antrakos/provider-http-async/apis/interfaces"
 )
 
 // RequestCRContext wraps a AsyncRequest CR and provides convenient access to its interfaces.

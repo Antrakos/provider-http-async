@@ -3,6 +3,8 @@ pre-push:
   commands:
     tidy:
       run: go mod tidy && git diff --exit-code go.mod go.sum
+    generate:
+      run: go generate ./... && git diff --exit-code
     lint:
       run: go tool golangci-lint run ./...
     test:

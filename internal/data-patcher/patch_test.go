@@ -4,8 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Antrakos/provider-http-async/apis/common"
-	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/test"
 	"github.com/google/go-cmp/cmp"
@@ -13,6 +11,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/Antrakos/provider-http-async/apis/common"
+	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
 )
 
 func TestPatchSecretsIntoBody(t *testing.T) {

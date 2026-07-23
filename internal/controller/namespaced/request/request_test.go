@@ -8,6 +8,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/crossplane/crossplane-runtime/v2/pkg/feature"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/test"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
+	"github.com/google/go-cmp/cmp"
+	"github.com/pkg/errors"
+
 	"github.com/Antrakos/provider-http-async/apis/common"
 	"github.com/Antrakos/provider-http-async/apis/interfaces"
 	"github.com/Antrakos/provider-http-async/apis/namespaced/request/v1alpha2"
@@ -15,14 +24,6 @@ import (
 	"github.com/Antrakos/provider-http-async/internal/service"
 	"github.com/Antrakos/provider-http-async/internal/service/request"
 	"github.com/Antrakos/provider-http-async/internal/service/request/polling"
-	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
-	"github.com/crossplane/crossplane-runtime/v2/pkg/feature"
-	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
-	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
-	"github.com/crossplane/crossplane-runtime/v2/pkg/resource"
-	"github.com/crossplane/crossplane-runtime/v2/pkg/test"
-	"github.com/google/go-cmp/cmp"
-	"github.com/pkg/errors"
 )
 
 var (

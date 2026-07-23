@@ -25,8 +25,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Antrakos/provider-http-async/apis/common"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/Antrakos/provider-http-async/apis/common"
 )
 
 func writeSAToken(t *testing.T, content string) string {

@@ -26,17 +26,18 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/pkg/errors"
+	"golang.org/x/exp/maps"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
+
 	"github.com/Antrakos/provider-http-async/apis/interfaces"
 	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
 	"github.com/Antrakos/provider-http-async/internal/jq"
 	json_util "github.com/Antrakos/provider-http-async/internal/json"
 	"github.com/Antrakos/provider-http-async/internal/service"
 	"github.com/Antrakos/provider-http-async/internal/service/request/requestgen"
-	"github.com/pkg/errors"
-	"golang.org/x/exp/maps"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/util/retry"
 )
 
 // defaultReconcileBudget caps how long a single reconcile iteration will spend
@@ -272,4 +273,3 @@ func SetTerminalFailure(svcCtx *service.ServiceContext, crCtx *service.RequestCR
 		return svcCtx.LocalKube.Status().Update(svcCtx.Ctx, resource)
 	})
 }
-

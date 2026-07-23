@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/Antrakos/provider-http-async/apis/common"
-	"github.com/Antrakos/provider-http-async/apis/interfaces"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	"github.com/pkg/errors"
+
+	"github.com/Antrakos/provider-http-async/apis/common"
+	"github.com/Antrakos/provider-http-async/apis/interfaces"
 )
 
 const (

@@ -5,13 +5,14 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/types"
+
 	"github.com/Antrakos/provider-http-async/apis/interfaces"
 	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
 	"github.com/Antrakos/provider-http-async/internal/service"
 	"github.com/Antrakos/provider-http-async/internal/service/request/requestgen"
 	"github.com/Antrakos/provider-http-async/internal/utils"
-	"github.com/pkg/errors"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 // RequestStatusHandler is the interface to interact with status setting for AsyncRequest resources
@@ -41,13 +42,13 @@ func (r *requestStatusHandler) SetRequestStatus() error {
 		return r.setErrorAndReturn(r.responseError)
 	}
 
-	basicSetters := []utils.SetRequestStatusFunc{
+	basicSetters := make([]utils.SetRequestStatusFunc, 0, 4+len(*r.extraSetters))
+	basicSetters = append(basicSetters,
 		r.resource.SetStatusCode(),
 		r.resource.SetHeaders(),
 		r.resource.SetBody(),
 		r.resource.SetRequestDetails(),
-	}
-
+	)
 	basicSetters = append(basicSetters, *r.extraSetters...)
 
 	if utils.IsHTTPError(r.resource.HttpResponse.StatusCode, r.forProvider.GetAllowedStatusCodes()) {
@@ -103,7 +104,7 @@ func (r *requestStatusHandler) appendExtraSetters(forProvider interfaces.MappedH
 func (r *requestStatusHandler) shouldSetCache(forProvider interfaces.MappedHTTPRequestSpec) bool {
 	for _, mapping := range forProvider.GetMappings() {
 		requestDetails, _, ok := requestgen.GenerateRequestDetails(r.svcCtx, mapping, forProvider, r.status, &r.resource.HttpResponse)
-		if !(requestgen.IsRequestValid(requestDetails) && ok) {
+		if !requestgen.IsRequestValid(requestDetails) || !ok {
 			return false
 		}
 	}

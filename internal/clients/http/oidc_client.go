@@ -21,10 +21,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Antrakos/provider-http-async/apis/common"
-	"github.com/Antrakos/provider-http-async/internal/clients/oidc"
 	"github.com/pkg/errors"
 	"golang.org/x/oauth2"
+
+	"github.com/Antrakos/provider-http-async/apis/common"
+	"github.com/Antrakos/provider-http-async/internal/clients/oidc"
 )
 
 // oidcClient decorates an existing Client with OIDC token injection.
@@ -56,38 +57,30 @@ func (c *oidcClient) SendRequest(ctx context.Context, method string, url string,
 		return HttpDetails{}, errors.Wrap(err, "failed to obtain OIDC token")
 	}
 
-	injectType := ""
+	headerName := authKey
+	prefix := "Bearer "
 	if c.inject != nil {
-		injectType = c.inject.Type
+		if c.inject.Header != "" {
+			headerName = c.inject.Header
+		}
+		// An explicit empty Prefix means "no prefix"; only default when inject is nil.
+		prefix = c.inject.Prefix
 	}
 
-	switch injectType {
-	default: // "header" or empty — Bearer header injection
-		headerName := "Authorization"
-		prefix := "Bearer "
-		if c.inject != nil {
-			if c.inject.Header != "" {
-				headerName = c.inject.Header
-			}
-			// An explicit empty Prefix means "no prefix"; only default when inject is nil.
-			prefix = c.inject.Prefix
-		}
-
-		hdrs, ok := headers.Decrypted.(map[string][]string)
-		if !ok {
-			hdrs = map[string][]string{}
-		}
-		if _, exists := hdrs[headerName]; !exists {
-			hdrs[headerName] = []string{prefix + tok.AccessToken}
-			headers.Decrypted = hdrs
-
-			encHdrs, eok := headers.Encrypted.(map[string][]string)
-			if !eok {
-				encHdrs = map[string][]string{}
-			}
-			encHdrs[headerName] = []string{prefix + "[OIDC-TOKEN]"}
-			headers.Encrypted = encHdrs
-		}
-		return c.inner.SendRequest(ctx, method, url, body, headers, tlsConfig)
+	hdrs, ok := headers.Decrypted.(map[string][]string)
+	if !ok {
+		hdrs = map[string][]string{}
 	}
+	if _, exists := hdrs[headerName]; !exists {
+		hdrs[headerName] = []string{prefix + tok.AccessToken}
+		headers.Decrypted = hdrs
+
+		encHdrs, eok := headers.Encrypted.(map[string][]string)
+		if !eok {
+			encHdrs = map[string][]string{}
+		}
+		encHdrs[headerName] = []string{prefix + "[OIDC-TOKEN]"}
+		headers.Encrypted = encHdrs
+	}
+	return c.inner.SendRequest(ctx, method, url, body, headers, tlsConfig)
 }

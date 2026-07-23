@@ -4,16 +4,17 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
-	"github.com/Antrakos/provider-http-async/apis/common"
-	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
-	"github.com/Antrakos/provider-http-async/internal/service"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/test"
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/errors"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
+	"github.com/Antrakos/provider-http-async/apis/common"
+	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
+	"github.com/Antrakos/provider-http-async/internal/service"
 )
 
 const (
@@ -462,7 +463,7 @@ func TestDeployAction_AsyncCreate_TerminalError(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{Name: "test-request", Namespace: "testns"},
 		Spec: v1alpha2.AsyncRequestSpec{
 			ForProvider: v1alpha2.AsyncRequestParameters{
-				Payload:  v1alpha2.Payload{Body: testBody, BaseUrl: testURL},
+				Payload: v1alpha2.Payload{Body: testBody, BaseUrl: testURL},
 				Mappings: []v1alpha2.Mapping{{
 					Method: "POST", Body: ".payload.body", URL: ".payload.baseUrl",
 					Polling: &common.Polling{

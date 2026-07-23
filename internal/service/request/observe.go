@@ -3,6 +3,10 @@ package request
 import (
 	"net/http"
 
+	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
+
 	"github.com/Antrakos/provider-http-async/apis/common"
 	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
 	datapatcher "github.com/Antrakos/provider-http-async/internal/data-patcher"
@@ -11,9 +15,6 @@ import (
 	"github.com/Antrakos/provider-http-async/internal/service/request/requestgen"
 	"github.com/Antrakos/provider-http-async/internal/service/request/requestmapping"
 	"github.com/Antrakos/provider-http-async/internal/utils"
-	"github.com/pkg/errors"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/util/retry"
 )
 
 const (
@@ -180,7 +181,7 @@ func isObjectValidForObservation(crCtx *service.RequestCRContext) bool {
 	spec := crCtx.Spec()
 
 	hasResponse := response.GetStatusCode() != 0 &&
-		!(requestDetails.GetMethod() == http.MethodPost && utils.IsHTTPError(response.GetStatusCode(), spec.GetAllowedStatusCodes()))
+		!(requestDetails.GetMethod() == http.MethodPost && utils.IsHTTPError(response.GetStatusCode(), spec.GetAllowedStatusCodes())) //nolint:staticcheck // De Morgan equivalent changes short-circuit behavior with 0 status code
 
 	return hasResponse || crCtx.Status().GetExternalRefValue() != ""
 }

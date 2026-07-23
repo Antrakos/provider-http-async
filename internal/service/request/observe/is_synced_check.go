@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/pkg/errors"
+
 	"github.com/Antrakos/provider-http-async/apis/common"
 	"github.com/Antrakos/provider-http-async/apis/interfaces"
 	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
@@ -14,7 +16,6 @@ import (
 	"github.com/Antrakos/provider-http-async/internal/service/request/requestgen"
 	"github.com/Antrakos/provider-http-async/internal/service/request/requestmapping"
 	"github.com/Antrakos/provider-http-async/internal/utils"
-	"github.com/pkg/errors"
 )
 
 var (

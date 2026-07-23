@@ -21,8 +21,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Antrakos/provider-http-async/apis/common"
 	"golang.org/x/oauth2"
+
+	"github.com/Antrakos/provider-http-async/apis/common"
 )
 
 // staticTokenSource is a test-only oauth2.TokenSource that returns a fixed token.
@@ -122,4 +123,3 @@ func TestOIDCClient_CustomHeaderName(t *testing.T) {
 		t.Errorf("expected X-Auth-Token: tok, got %v", hdrs["X-Auth-Token"])
 	}
 }
-

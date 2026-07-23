@@ -11,8 +11,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Antrakos/provider-http-async/apis/interfaces"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+
+	"github.com/Antrakos/provider-http-async/apis/interfaces"
 )
 
 const (

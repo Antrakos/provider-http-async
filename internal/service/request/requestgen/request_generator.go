@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/pkg/errors"
+	"golang.org/x/exp/maps"
+
 	"github.com/Antrakos/provider-http-async/apis/interfaces"
 	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
 	datapatcher "github.com/Antrakos/provider-http-async/internal/data-patcher"
@@ -11,8 +14,6 @@ import (
 	"github.com/Antrakos/provider-http-async/internal/service"
 	"github.com/Antrakos/provider-http-async/internal/service/request/requestprocessing"
 	"github.com/Antrakos/provider-http-async/internal/utils"
-	"github.com/pkg/errors"
-	"golang.org/x/exp/maps"
 )
 
 type RequestDetails struct {
