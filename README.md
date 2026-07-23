@@ -76,24 +76,99 @@ directly on an `AsyncRequest` spec (per-resource override). The pod's projected 
 account token is exchanged with the configured STS endpoint; no credentials are stored
 in etcd.
 
+Token caching and expiry are handled by `golang.org/x/oauth2.ReuseTokenSource`.
+
+#### GKE Workload Identity (full setup)
+
+GKE automatically provisions a Workload Identity Pool per project (`<project-id>.svc.id.goog`).
+No custom pool is needed, and no GCP Service Account is required — grant IAM roles directly
+to the provider's federated KSA identity.
+
+The STS exchange produces a **federated identity token** representing the Kubernetes SA
+(`principal://iam.googleapis.com/.../subject/system:serviceaccount:crossplane-system:provider-http-async`).
+This token is sufficient to call GCP APIs — you just bind the required role to that principal
+directly instead of going through a GCP SA.
+
+**1. IAM permissions (Terraform)**
+
+```hcl
+resource "google_project_iam_member" "provider_http_async_vertex" {
+  project = var.project
+  role    = "roles/aiplatform.user"   # or whichever role the API requires
+  member  = "principal://iam.googleapis.com/projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/<PROJECT_ID>.svc.id.goog/subject/system:serviceaccount:crossplane-system:provider-http-async"
+}
+```
+
+`<PROJECT_NUMBER>` is the numeric project ID; `<PROJECT_ID>` is the string project ID —
+both from the GKE cluster's host project.
+
+**2. Pin the provider's Kubernetes Service Account name**
+
+Use a `DeploymentRuntimeConfig` to give the provider a stable, predictable SA name.
+This name is what you reference in the IAM binding member above.
+
 ```yaml
-# ProviderConfig
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: provider-http-async
 spec:
+  serviceAccountTemplate:
+    metadata:
+      name: provider-http-async   # stable name; matches the IAM binding member
+  deploymentTemplate:
+    spec:
+      selector: {}
+      template:
+        spec:
+          volumes:
+            - name: wi-token-gcp
+              projected:
+                sources:
+                  - serviceAccountToken:
+                      # Must match oidc.exchange.audience in the ProviderConfig
+                      audience: "//iam.googleapis.com/projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/<PROJECT_ID>.svc.id.goog/providers/kubernetes"
+                      expirationSeconds: 3600
+                      path: token
+          containers:
+            - name: package-runtime
+              volumeMounts:
+                - name: wi-token-gcp
+                  # Custom path avoids collision with the default SA token mount
+                  mountPath: /var/run/secrets/oidc/gcp
+                  readOnly: true
+```
+
+The provider cannot use the GKE metadata server shortcut because it needs the token
+explicitly to inject into outgoing HTTP headers. The projected volumes supply those tokens.
+
+**3. ProviderConfig**
+
+```yaml
+apiVersion: http.async.m.crossplane.io/v1alpha2
+kind: ProviderConfig
+metadata:
+  name: vertex-ai-gcp
+  namespace: my-team
+spec:
+  credentials:
+    source: None    # OIDC handles auth; no secret needed
   oidc:
+    # Path must match the mountPath in the provider Deployment
+    serviceAccountTokenPath: /var/run/secrets/oidc/gcp/token
     exchange:
       tokenEndpoint: https://sts.googleapis.com/v1/token
-      audience: //iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/my-pool/providers/my-provider
+      audience: "//iam.googleapis.com/projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/<PROJECT_ID>.svc.id.goog/providers/kubernetes"
       extraParams:
+        grant_type: urn:ietf:params:oauth:grant-type:token-exchange
         requested_token_type: urn:ietf:params:oauth:token-type:access_token
         scope: https://www.googleapis.com/auth/cloud-platform
     inject:
-      type: header        # "header" (default)
+      type: header
       header: Authorization
       prefix: "Bearer "
-    refreshBefore: 5m    # re-exchange this long before token expiry
+    refreshBefore: 5m
 ```
-
-Token caching and expiry are handled by `golang.org/x/oauth2.ReuseTokenSource`.
 
 ### jq context
 
