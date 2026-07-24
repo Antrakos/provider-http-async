@@ -264,8 +264,14 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	// Import / orphan-recovery: seed status.externalRef from crossplane.io/external-name
 	// if it is not yet populated.
+	//
+	// Crossplane's default NameAsExternalName initializer auto-populates the
+	// external-name annotation with metadata.name for every resource, so its mere
+	// presence does not signal an import. Only seed when the user explicitly set it
+	// to something *other* than the object name — otherwise externalRef would be
+	// polluted with the meaningless k8s name and leak into OBSERVE/UPDATE/DELETE URLs.
 	if crCtx.Status().GetExternalRefValue() == "" {
-		if extName := meta.GetExternalName(cr); extName != "" {
+		if extName := meta.GetExternalName(cr); extName != "" && extName != cr.GetName() {
 			crCtx.StatusWriter().SetExternalRef(extName)
 			if err := c.localKube.Status().Update(ctx, cr); err != nil {
 				return managed.ExternalObservation{}, errors.Wrap(err, "failed to seed externalRef from external-name annotation")

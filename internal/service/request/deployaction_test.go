@@ -424,7 +424,7 @@ func TestDeployAction_AsyncCreate_DoneAfterTwoPollIterations(t *testing.T) {
 		},
 	}
 
-	cr := crWithPolling(`"operations/123"`, "")
+	cr := crWithPolling(`"http://api/operations/123"`, "")
 	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
 	crCtx := service.NewRequestCRContext(cr)
 
@@ -467,7 +467,7 @@ func TestDeployAction_AsyncCreate_TerminalError(t *testing.T) {
 				Mappings: []v1alpha2.Mapping{{
 					Method: "POST", Body: ".payload.body", URL: ".payload.baseUrl",
 					Polling: &common.Polling{
-						URL:   `"operations/456"`,
+						URL:   `"http://api/operations/456"`,
 						Done:  ".poll.response.body.done == true",
 						Error: ".poll.response.body.error",
 					},

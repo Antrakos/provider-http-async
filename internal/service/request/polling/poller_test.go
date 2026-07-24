@@ -224,6 +224,87 @@ func TestPoll_Timeout(t *testing.T) {
 	}
 }
 
+// TestPoll_BarePathURL_TerminalError verifies that a polling.url resolving to a
+// scheme-less path (the common GCP LRO misconfiguration) is reported as a terminal
+// failure with an actionable message, and that no poll GET is attempted.
+func TestPoll_BarePathURL_TerminalError(t *testing.T) {
+	interval := metav1.Duration{Duration: 1 * time.Millisecond}
+	timeout := metav1.Duration{Duration: 30 * time.Minute}
+	mapping := &clusterv1alpha2.Mapping{
+		Method: "POST",
+		Action: common.ActionCreate,
+		URL:    ".payload.baseUrl",
+		Polling: &common.Polling{
+			// jq expression that yields a bare GCP resource path (no scheme).
+			URL:      `.response.body.name`,
+			Done:     ".poll.response.body.done == true",
+			Interval: &interval,
+			Timeout:  &timeout,
+		},
+	}
+
+	cr := &clusterv1alpha2.AsyncRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-barepath", Namespace: "default"},
+	}
+	cr.Spec.ForProvider = clusterv1alpha2.AsyncRequestParameters{
+		Payload:  clusterv1alpha2.Payload{BaseUrl: "https://example.com"},
+		Mappings: []clusterv1alpha2.Mapping{*mapping},
+	}
+
+	kube := buildFakeKube(cr)
+	svcCtx := buildSvcCtx(t, kube, buildHTTPClient(t))
+	crCtx := buildCRCtx(cr)
+
+	mutateResponse := map[string]interface{}{
+		"body": map[string]interface{}{
+			"name": "projects/123/locations/us-central1/operations/789",
+		},
+	}
+
+	p := New()
+	result, err := p.Poll(svcCtx, crCtx, mapping, mutateResponse, "")
+	if err != nil {
+		t.Fatalf("expected nil Go error (terminal failure), got: %v", err)
+	}
+	if result.TerminalErr == "" {
+		t.Fatal("expected TerminalErr to be set for a scheme-less polling.url")
+	}
+	if result.Done {
+		t.Error("Done should be false on terminal error")
+	}
+	// operationRef must not be persisted for an unpollable URL.
+	if cr.Status.Polling.OperationRef != "" {
+		t.Errorf("expected operationRef to remain empty, got %q", cr.Status.Polling.OperationRef)
+	}
+}
+
+func TestValidateOperationURL(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		wantErr bool
+	}{
+		{"absolute https", "https://api.example.com/v1/operations/1", false},
+		{"absolute http", "http://api.example.com/op", false},
+		{"bare path", "projects/123/operations/789", true},
+		{"leading slash path", "/v1/operations/1", true},
+		{"empty", "", true},
+		{"ftp scheme", "ftp://host/path", true},
+		{"scheme no host", "https:///op", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := validateOperationURL(tc.raw)
+			if tc.wantErr && got == "" {
+				t.Errorf("expected a validation error for %q, got none", tc.raw)
+			}
+			if !tc.wantErr && got != "" {
+				t.Errorf("expected no validation error for %q, got %q", tc.raw, got)
+			}
+		})
+	}
+}
+
 // TestPoll_Timeout_CrossReconcile verifies that a CR with OperationStartedAt already in
 // the past (beyond timeout) times out immediately without making any poll GET.
 func TestPoll_Timeout_CrossReconcile(t *testing.T) {

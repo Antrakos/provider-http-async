@@ -24,6 +24,7 @@ package polling
 
 import (
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/pkg/errors"
@@ -106,6 +107,23 @@ func (fp *foregroundPoller) Poll(
 		if operationURL == "" {
 			return Result{}, errors.Errorf("polling.url %q resolved to an empty operation URL", polling.GetURL())
 		}
+		// The mutate call already succeeded (a resource was provisioned) by the time we
+		// get here, so a malformed polling.url is a terminal *config* error, not a
+		// transient one: retrying re-fires the poll GET forever against an unpollable
+		// URL and never recovers. Many GCP LRO APIs return `name` as a bare resource
+		// path (e.g. "projects/.../operations/789") — writing `polling.url:
+		// .response.body.name` yields a scheme-less string that http.Get rejects with
+		// "unsupported protocol scheme". Surface this as a terminal failure with an
+		// actionable message so the operator fixes the expression (prepending the base
+		// URL) instead of the provider silently retrying. Recoverable on spec change.
+		if reason := validateOperationURL(operationURL); reason != "" {
+			return Result{TerminalErr: fmt.Sprintf(
+				"polling.url %q resolved to %q, which is not a valid absolute URL: %s. "+
+					"Many GCP LRO APIs return a bare resource path in .response.body.name; "+
+					"prepend the base URL, e.g. '\"https://<host>/<version>/\" + .response.body.name'.",
+				polling.GetURL(), operationURL, reason,
+			)}, nil
+		}
 	}
 
 	// PRD step a': persist operationRef BEFORE the first GET so a crash mid-poll
@@ -186,6 +204,27 @@ func (fp *foregroundPoller) Poll(
 		case <-timer.C:
 		}
 	}
+}
+
+// validateOperationURL returns an empty string when raw is a usable absolute HTTP(S)
+// URL, or a short human-readable reason why it is not. It exists to catch the common
+// misconfiguration where polling.url resolves to a scheme-less path (the failure mode
+// http.Get reports opaquely as `unsupported protocol scheme ""`).
+func validateOperationURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return err.Error()
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		if u.Scheme == "" {
+			return "missing scheme (expected http:// or https://)"
+		}
+		return fmt.Sprintf("unsupported scheme %q (expected http or https)", u.Scheme)
+	}
+	if u.Host == "" {
+		return "missing host"
+	}
+	return ""
 }
 
 // persistOperationRef writes operationRef (and, on first entry, operationStartedAt) to

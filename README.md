@@ -29,7 +29,7 @@ mappings:
     url: '.payload.baseUrl + "/models:upload"'
     body: .payload.body
     polling:
-      url: .response.body.name          # jq against the mutate response — stable for the full loop
+      url: '"https://us-central1-aiplatform.googleapis.com/v1beta1/" + .response.body.name'
       done: .poll.response.body.done == true
       error: .poll.response.body.error  # non-null → terminal failure (Ready=False, Synced=False)
       timeout: 30m                      # default 30m
@@ -40,6 +40,17 @@ The reconciler drives the poll loop in the foreground for up to 2 minutes per re
 iteration, then requeues. `status.operationRef` is the crash-recovery anchor — a
 reconcile that finds it non-empty resumes the in-flight operation instead of re-firing
 the mutate call.
+
+> **`polling.url` must resolve to an absolute URL.** The resolved value is used verbatim
+> as the poll GET target, so it must include a scheme and host
+> (`https://host/path`). Many GCP LRO APIs (Vertex AI `models:upload`, `endpoints`,
+> `deployModel`, …) return `name` as a **bare resource path** such as
+> `projects/123/locations/us-central1/operations/789`, not a full URL. Writing
+> `url: .response.body.name` therefore yields a scheme-less string that fails with
+> `unsupported protocol scheme ""`. Prepend the base URL as shown above. If the
+> expression resolves to a non-absolute URL the provider stops with a **terminal
+> failure** (`Synced=False`) and a descriptive message instead of retrying — it does
+> **not** re-fire CREATE, so no duplicate remote resource is minted.
 
 ### External reference
 
@@ -68,6 +79,12 @@ metadata:
 
 On the first reconcile the controller seeds `status.externalRef` from this annotation
 and immediately observes the resource rather than creating it.
+
+> The annotation value **must differ from `metadata.name`** to be treated as an import.
+> Crossplane's default initializer auto-populates `crossplane.io/external-name` with the
+> object's own name for every resource, so a value equal to `metadata.name` is ignored
+> for seeding (it carries no external identity). Set it to the real remote identifier
+> (e.g. `models/model-id-789`) to adopt an existing resource.
 
 ### OIDC workload-identity
 

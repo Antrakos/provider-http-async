@@ -235,6 +235,67 @@ func TestObserve(t *testing.T) {
 	}
 }
 
+// TestObserve_ExternalRefSeeding verifies that status.externalRef is seeded from the
+// crossplane.io/external-name annotation only when the annotation was explicitly set to
+// a value other than metadata.name. Crossplane's default NameAsExternalName initializer
+// sets external-name == metadata.name for every resource, which must NOT be seeded (it
+// would pollute .status.externalRef with the meaningless k8s name).
+func TestObserve_ExternalRefSeeding(t *testing.T) {
+	// HTTP mock that always errors so Observe returns quickly after the seeding step.
+	// The seeding runs before IsUpToDate, so it mutates the CR regardless of this error.
+	http := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			return httpClient.HttpDetails{}, errBoom
+		},
+	}
+
+	cases := []struct {
+		name        string
+		externalNam string
+		wantRef     string
+	}{
+		{
+			name:        "AnnotationEqualsObjectName_NotSeeded",
+			externalNam: "test-request",
+			wantRef:     "",
+		},
+		{
+			name:        "AnnotationDiffersFromObjectName_Seeded",
+			externalNam: "models/imported-model-789",
+			wantRef:     "models/imported-model-789",
+		},
+		{
+			name:        "NoAnnotation_NotSeeded",
+			externalNam: "",
+			wantRef:     "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cr := httpNamespacedRequest(func(r *v1alpha2.AsyncRequest) {
+				r.Name = "test-request"
+				r.Status.Response = v1alpha2.Response{}
+				if tc.externalNam != "" {
+					r.SetAnnotations(map[string]string{"crossplane.io/external-name": tc.externalNam})
+				}
+			})
+
+			e := &external{
+				logger:    logging.NewNopLogger(),
+				localKube: &test.MockClient{MockGet: test.NewMockGetFn(nil), MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil)},
+				http:      http,
+			}
+
+			_, _ = e.Observe(context.Background(), cr)
+
+			if got := cr.Status.ExternalRef; got != tc.wantRef {
+				t.Errorf("status.externalRef = %q, want %q", got, tc.wantRef)
+			}
+		})
+	}
+}
+
 func TestCreate(t *testing.T) {
 	type args struct {
 		http      httpClient.Client
