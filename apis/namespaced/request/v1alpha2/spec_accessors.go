@@ -73,6 +73,11 @@ func (r *AsyncRequestParameters) GetIsRemovedCheck() interfaces.ResponseCheck {
 	return &r.IsRemovedCheck
 }
 
+// GetResourceExistsCheck returns the resource-exists check configuration.
+func (r *AsyncRequestParameters) GetResourceExistsCheck() interfaces.ResponseCheck {
+	return &r.ResourceExistsCheck
+}
+
 // GetAllowedStatusCodes returns the HTTP status codes that should not be treated as errors.
 func (r *AsyncRequestParameters) GetAllowedStatusCodes() []int {
 	return r.AllowedStatusCodes

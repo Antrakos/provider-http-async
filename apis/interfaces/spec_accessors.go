@@ -163,6 +163,11 @@ type ResponseCheckAware interface {
 	// GetExpectedResponseCheck returns the expected response check configuration.
 	GetExpectedResponseCheck() ResponseCheck
 
+	// GetResourceExistsCheck returns the resource-exists check configuration.
+	// It distinguishes existence (should we CREATE?) from drift (should we
+	// UPDATE?) for sub-resources embedded in a parent OBSERVE response.
+	GetResourceExistsCheck() ResponseCheck
+
 	// GetIsRemovedCheck returns the is-removed check configuration.
 	GetIsRemovedCheck() ResponseCheck
 }

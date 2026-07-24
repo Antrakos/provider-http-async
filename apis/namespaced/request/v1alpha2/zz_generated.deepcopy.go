@@ -118,6 +118,7 @@ func (in *AsyncRequestParameters) DeepCopyInto(out *AsyncRequestParameters) {
 		}
 	}
 	out.ExpectedResponseCheck = in.ExpectedResponseCheck
+	out.ResourceExistsCheck = in.ResourceExistsCheck
 	out.IsRemovedCheck = in.IsRemovedCheck
 	if in.AllowedStatusCodes != nil {
 		in, out := &in.AllowedStatusCodes, &out.AllowedStatusCodes

@@ -61,6 +61,11 @@ const (
 
 	errInvalidAuthSelection = "invalid auth configuration"
 
+	// terminalErrorPrefix is the stable prefix on the Ready condition message for any
+	// terminal/stuck state (terminal poll failure or a missing UPDATE mapping). It lets a
+	// consumer/grep distinguish a stuck state from a transient reconcile error.
+	terminalErrorPrefix = "Terminal error: "
+
 	defaultProviderConfig = "default"
 )
 
@@ -290,20 +295,21 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		return managed.ExternalObservation{}, errors.Wrap(err, errFailedToCheckIfUpToDate)
 	}
 
-	// Terminal failure: report the resource unhealthy but up-to-date so the reconciler
-	// does not re-fire Create/Update. It stays in this state until the spec changes.
+	// Terminal failure: a prior poll failed terminally (polling.error non-null, bad/empty
+	// polling.url, or timeout) OR OBSERVE detected a stuck state (resource out of sync with
+	// no UPDATE mapping). Both are persisted to status.polling.terminalError + observedGeneration
+	// (poll terminals in DeployAction, the missing-mapping terminal in determineIfUpToDate), so
+	// IsUpToDate short-circuits on GetTerminalError() and stops re-firing OBSERVE/CREATE/UPDATE
+	// until a spec change (generation drift) clears the terminal via clearTerminalError. Surface
+	// Ready=False with a "Terminal error: " message and return an error so the managed reconciler
+	// reports Synced=False (ReconcileError) and persists. Returning up-to-date would let the
+	// reconciler overwrite Synced with ReconcileSuccess, hiding the failure; returning an error
+	// guarantees both conditions stay honest. For a poll terminal the anchor is retained, so a
+	// corrected spec resumes the operation rather than re-creating.
 	if observeRequestDetails.TerminalError != "" {
-		cr.Status.SetConditions(
-			xpv2.Unavailable().WithMessage(observeRequestDetails.TerminalError),
-			xpv2.ReconcileError(errors.New(observeRequestDetails.TerminalError)),
-		)
-		if updateErr := c.localKube.Status().Update(ctx, cr); updateErr != nil {
-			return managed.ExternalObservation{}, errors.Wrap(updateErr, " failed updating status")
-		}
-		return managed.ExternalObservation{
-			ResourceExists:   true,
-			ResourceUpToDate: true,
-		}, nil
+		msg := terminalErrorPrefix + observeRequestDetails.TerminalError
+		cr.Status.SetConditions(xpv2.Unavailable().WithMessage(msg))
+		return managed.ExternalObservation{}, errors.New(msg)
 	}
 
 	statusHandler, err := statushandler.NewStatusHandler(svcCtx, crCtx, observeRequestDetails.Details, observeRequestDetails.ResponseError)
@@ -316,7 +322,19 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		statusHandler.ResetFailures()
 	}
 
-	cr.Status.SetConditions(xpv2.Available())
+	// An in-flight UPDATE/REMOVE long-running operation is still settling: report Ready=False
+	// (Creating) so a consumer does not mistake a polling resource for ready. This branch is
+	// reached only when status.polling.response is set AND externalRef is set (the UPDATE/REMOVE
+	// resume); the CREATE+poll resume (externalRef unset) returns ErrObjectNotFound and routes to
+	// Create(), whose success the reconciler reports as Creating() itself. Synced reflects the
+	// returned ResourceUpToDate (false here): the reconciler calls Update(), which resumes the
+	// poll — if the poll is still running it returns nil → ReconcileSuccess, and if it completes
+	// or fails the next reconcile reports accordingly.
+	if observeRequestDetails.InFlight {
+		cr.Status.SetConditions(xpv2.Creating())
+	} else {
+		cr.Status.SetConditions(xpv2.Available())
+	}
 	err = statusHandler.SetRequestStatus()
 	if err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, " failed updating status")

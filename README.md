@@ -75,6 +75,115 @@ The result is stored in `status.externalRef` and available as `.status.externalR
 all subsequent jq expressions — OBSERVE URL, UPDATE URL, DELETE URL, and
 `expectedResponseCheck`.
 
+### Sub-resource existence: `resourceExistsCheck`
+
+Some APIs have no dedicated GET for the resource you manage — the only way to observe
+it is to GET a **parent** that always returns `2xx` and check whether your sub-resource
+is present in the response. A Vertex AI `deployedModel` is the canonical case: it is
+observed via `GET /endpoints/{id}`, which returns `200` whether or not any model is
+deployed to the endpoint.
+
+Without a separate existence signal the reconciler treats the parent's `200` as "the
+resource exists", so `expectedResponseCheck: false` is read as drift and the controller
+calls `Update()` — which then finds no UPDATE mapping and silently skips, never reaching
+`Create()`. The resource is stuck.
+
+`resourceExistsCheck` decouples existence from drift. It is a CUSTOM jq expression
+evaluated against the OBSERVE response (with `.status.externalRef` available) **after**
+the in-flight anchor gate and **before** `expectedResponseCheck`:
+
+- `resourceExistsCheck: false` → the sub-resource is absent → **CREATE**
+- `resourceExistsCheck: true` → exists → fall through to `expectedResponseCheck`
+  (`false` → UPDATE, `true` → up to date)
+
+> This check is an **override for the 2xx-parent case**, not a replacement for the default
+> existence inference. The default — a non-2xx OBSERVE on a first observe (no
+> `externalRef`, no prior response) already routes to CREATE, and an `isRemovedCheck` 404
+> routes to delete — fires **before** `resourceExistsCheck`, which only runs on a 2xx
+> response. That is the one case the HTTP status cannot answer: the parent's `200` tells
+> you the parent exists, not whether the sub-resource you own is in it.
+
+```yaml
+mappings:
+  - action: CREATE
+    method: POST
+    url: '.payload.baseUrl + "/endpoints/456:deployModel"'
+    body: .payload.body
+    polling:
+      url: '"https://aiplatform.googleapis.com/v1beta1/" + .response.body.name'
+      done: .poll.response.body.done == true
+      error: .poll.response.body.error
+      timeout: 60m
+      interval: 30s
+  - action: OBSERVE
+    method: GET
+    url: '.payload.baseUrl + "/endpoints/456"'   # parent — always 200
+  - action: REMOVE
+    method: POST
+    url: '.payload.baseUrl + "/endpoints/456:undeployModel"'
+    body: '{"deployedModelId": .status.externalRef}'
+resourceExistsCheck:
+  type: CUSTOM
+  logic: |
+    (.response.body.deployedModels // []) as $m
+    | .status.externalRef as $ref
+    | ($m | map(select(.id == $ref)) | length > 0)
+expectedResponseCheck:
+  type: CUSTOM
+  logic: |
+    (.response.body.deployedModels // []) as $m
+    | .status.externalRef as $ref
+    | ($m | map(select(.id == $ref)) | length > 0)
+```
+
+> Inside `map(select(...))` the `.` is the list element, so `.status` would resolve to
+> the element's (null) `.status`, not the root's. Bind the list and `.status.externalRef`
+> to variables first, as shown, then reference them inside the `map`.
+
+When unset, or `type: DEFAULT`, existence is inferred from the OBSERVE HTTP status (the
+default behavior every existing manifest relies on); `resourceExistsCheck` is then a
+no-op and the check is skipped entirely. There is no DEFAULT jq logic because the
+default is not a jq expression — it is the HTTP-status inference above. This field is
+therefore only meaningful with `type: CUSTOM`.
+
+### Status conditions
+
+The provider owns the `Ready` condition; Crossplane's managed reconciler owns `Synced`.
+Failure modes are surfaced so a consumer can tell something is wrong from `kubectl get`
+alone, without reading pod logs:
+
+| State | `Ready` | `Synced` | Message |
+|---|---|---|---|
+| Up to date | `True` (`Available`) | `True` (`ReconcileSuccess`) | — |
+| In-flight long-running operation (poll still running, budget exhausted per reconcile) | `False` (`Creating`) | `True` (`ReconcileSuccess`) | — |
+| Terminal poll/config failure (bad/empty `polling.url`, `polling.error` non-null, timeout) | `False` (`Unavailable`) | `False` (`ReconcileError`) | `Terminal error: <detail>` |
+| CUSTOM check reports drift with no UPDATE/PUT mapping | `False` (`Unavailable`) | `False` (`ReconcileError`) | `Terminal error: no UPDATE or PUT mapping is configured but the resource is out of sync …` |
+
+> The "in-flight" row is the steady state while a long-running operation's poll
+> is still running — each reconcile re-enters the poll, exhausts its per-reconcile
+> budget, and returns nil, which the reconciler reports as `ReconcileSuccess`
+> (it calls `Create()` when `externalRef` is unset, `Update()` when set). The same
+> reconcile in which the poll *completes* or *fails terminally* transitions to the
+> "Up to date" or "Terminal" row instead, so `Synced` is only reliably `True` while
+> the poll keeps running.
+
+A terminal failure is stable: the provider persists it to
+`status.polling.terminalError` (with `observedGeneration`) and stops re-firing
+OBSERVE/CREATE/UPDATE — `IsUpToDate` short-circuits on the next reconcile — until the
+spec changes; a generation bump clears the terminal and retries. For a poll terminal the
+anchor is retained, so a corrected `polling.url` resumes the existing operation rather
+than creating a duplicate. The `Terminal error: ` prefix on the `Ready` message lets a
+consumer or alert distinguish a stuck state from a transient reconcile error.
+
+> The "drift with no UPDATE mapping" terminal applies to the **CUSTOM**
+> `expectedResponseCheck`, which reports drift explicitly (`logic` returns `false`).
+> The **DEFAULT** check compares the response to the UPDATE body, so with no UPDATE
+> mapping it cannot detect drift and reports up-to-date — the intended behavior for
+> create-only resources (CREATE/OBSERVE only) that are in sync, which are not a stuck
+> state and stay `Ready=True`. (A DEFAULT-check resource that has drifted but has no
+> UPDATE mapping is a pre-existing limitation of the DEFAULT check, not surfaced as a
+> terminal — use a CUSTOM `expectedResponseCheck` to get drift detection.)
+
 ### Import via annotation
 
 To adopt an existing remote resource without recreating it, annotate the `AsyncRequest`:
@@ -264,6 +373,7 @@ identity block is rejected with `Synced=False`.
 | `OBSERVE.url` | — | — | ✓ |
 | `UPDATE.url` / `DELETE.url` | previous OBSERVE response | — | ✓ |
 | `expectedResponseCheck` | current OBSERVE response | — | ✓ |
+| `resourceExistsCheck` | current OBSERVE response | — | ✓ |
 | `externalRef` | mutate response (sync) | completed operation response (async) | ✓ |
 
 ### Differences from provider-http

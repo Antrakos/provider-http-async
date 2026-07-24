@@ -140,6 +140,51 @@ func isErrorMappingNotFound(err error) bool {
 	return errors.Cause(err).Error() == fmt.Sprintf(requestmapping.ErrMappingNotFound, common.ActionUpdate, http.MethodPut)
 }
 
+// customResourceExistsCheck performs a custom resource-exists check using JQ logic.
+// Unlike the up-to-date check, existence is a pure CUSTOM concept: there is no
+// DEFAULT comparison for "does my sub-resource exist inside a parent response".
+type customResourceExistsCheck struct{}
+
+// Check performs a custom resource-exists check using JQ logic. Returns true when
+// the managed sub-resource is present in the OBSERVE response, false when absent.
+func (c *customResourceExistsCheck) Check(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext, details httpClient.HttpDetails, responseErr error) (bool, error) {
+	spec := crCtx.Spec()
+
+	responseCheckAware, ok := spec.(interfaces.ResponseCheckAware)
+	if !ok {
+		return false, errors.New("spec does not implement ResponseCheckAware")
+	}
+
+	logic := responseCheckAware.GetResourceExistsCheck().GetLogic()
+	customCheck := &customCheck{}
+
+	exists, err := customCheck.check(svcCtx, spec, crCtx.Status(), details, logic)
+	if err != nil {
+		return false, errors.Errorf(errExpectedFormat, "ResourceExistsCheck", err.Error())
+	}
+
+	return exists, nil
+}
+
+// GetResourceExistsResponseCheck returns a resource-exists checker when the
+// resourceExistsCheck field is configured with CUSTOM logic, or nil when it is
+// not configured. A nil return means "existence inferred from the OBSERVE HTTP
+// status" (the default behavior): a non-nil checker decouples existence from
+// drift for sub-resources embedded in a parent response that always returns 2xx.
+func GetResourceExistsResponseCheck(spec interfaces.MappedHTTPRequestSpec) responseCheck {
+	responseCheckAware, ok := spec.(interfaces.ResponseCheckAware)
+	if !ok {
+		return nil
+	}
+
+	check := responseCheckAware.GetResourceExistsCheck()
+	if check == nil || check.GetType() != common.ExpectedResponseCheckTypeCustom || check.GetLogic() == "" {
+		return nil
+	}
+
+	return &customResourceExistsCheck{}
+}
+
 // requestDetails generates the request details for a given method or action.
 func (d *defaultIsUpToDateResponseCheck) requestDetails(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext, action string) (requestgen.RequestDetails, error) {
 	spec := crCtx.Spec()

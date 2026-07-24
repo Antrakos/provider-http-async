@@ -2,10 +2,14 @@ package request
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/feature"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -391,6 +395,11 @@ func Test_httpExternal_Observe(t *testing.T) {
 	type want struct {
 		observation managed.ExternalObservation
 		err         error
+		// readyStatus/readyReason/readyMsg assert the Ready condition set by Observe for
+		// the terminal and in-flight cases (the reconciler owns Synced).
+		readyStatus corev1.ConditionStatus
+		readyReason xpv2.ConditionReason
+		readyMsg    string
 	}
 
 	cases := []struct {
@@ -454,6 +463,127 @@ func Test_httpExternal_Observe(t *testing.T) {
 				err: nil,
 			},
 		},
+		{
+			name: "TerminalFailure_ReturnsErrorAndReadyFalse",
+			args: args{
+				http: &MockHttpClient{
+					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+						t.Errorf("OBSERVE must not fire when a terminal error is recorded")
+						return httpClient.HttpDetails{}, nil
+					},
+				},
+				localKube: &test.MockClient{
+					MockGet:          test.NewMockGetFn(nil),
+					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+				},
+				mg: func() *v1alpha2.AsyncRequest {
+					cr := &v1alpha2.AsyncRequest{
+						ObjectMeta: v1.ObjectMeta{Generation: 1},
+						Spec: v1alpha2.AsyncRequestSpec{
+							ForProvider: v1alpha2.AsyncRequestParameters{
+								Payload:  v1alpha2.Payload{BaseUrl: "https://api.example.com/users/123"},
+								Mappings: []v1alpha2.Mapping{{Method: "GET", URL: ".payload.baseUrl"}},
+							},
+						},
+						Status: v1alpha2.AsyncRequestStatus{
+							Polling: v1alpha2.PollingStatus{
+								TerminalError: "polling.url resolved to a bare path",
+							},
+						},
+					}
+					// observedGeneration == generation so the terminal failure is stable (not cleared
+					// by a spec change); IsUpToDate short-circuits without firing OBSERVE.
+					cr.Status.SetObservedGeneration(1)
+					return cr
+				}(),
+			},
+			want: want{
+				err:         errors.New(terminalErrorPrefix + "polling.url resolved to a bare path"),
+				readyStatus: corev1.ConditionFalse,
+				readyReason: xpv2.ReasonUnavailable,
+				readyMsg:    "polling.url resolved to a bare path",
+			},
+		},
+		{
+			name: "InFlight_ReadyCreating",
+			args: args{
+				http: &MockHttpClient{
+					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+						t.Errorf("OBSERVE must not fire while the anchor is in flight")
+						return httpClient.HttpDetails{}, nil
+					},
+				},
+				localKube: &test.MockClient{
+					MockGet:          test.NewMockGetFn(nil),
+					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+				},
+				mg: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
+							Payload: v1alpha2.Payload{BaseUrl: "https://api.example.com/users/123"},
+							Mappings: []v1alpha2.Mapping{
+								{Method: "POST", Action: "CREATE", URL: ".payload.baseUrl", Polling: &common.Polling{URL: ".response.body.name", Done: ".poll.response.body.done == true"}},
+								{Method: "GET", Action: "OBSERVE", URL: `.payload.baseUrl + "/" + .status.externalRef`},
+							},
+						},
+					},
+					Status: v1alpha2.AsyncRequestStatus{
+						ExternalRef: "model-789",
+						Polling: v1alpha2.PollingStatus{
+							Response: &runtime.RawExtension{Raw: []byte(`{"body":{"name":"op-1"}}`)},
+						},
+					},
+				},
+			},
+			want: want{
+				observation: managed.ExternalObservation{ResourceExists: true, ResourceUpToDate: false},
+				readyStatus: corev1.ConditionFalse,
+				readyReason: xpv2.ReasonCreating,
+			},
+		},
+		{
+			name: "MissingMappingTerminal_ReturnsErrorAndReadyFalse",
+			args: args{
+				http: &MockHttpClient{
+					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+						// OBSERVE fires (resource was observed before): parent returns 200; the
+						// CUSTOM expectedResponseCheck reports drift, and with no UPDATE mapping the
+						// provider surfaces a terminal error instead of silently skipping.
+						return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: 200, Body: `{"deployedModels": []}`}}, nil
+					},
+				},
+				localKube: &test.MockClient{
+					MockGet:          test.NewMockGetFn(nil),
+					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+				},
+				mg: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
+							Payload: v1alpha2.Payload{BaseUrl: "https://api.example.com/endpoints/456"},
+							Mappings: []v1alpha2.Mapping{
+								{Method: "POST", Action: "CREATE", URL: ".payload.baseUrl", Body: ".payload.body"},
+								{Method: "GET", Action: "OBSERVE", URL: ".payload.baseUrl"},
+								{Method: "DELETE", Action: "REMOVE", URL: ".payload.baseUrl"},
+							},
+							ExpectedResponseCheck: v1alpha2.ExpectedResponseCheck{
+								Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
+								Logic: `false`,
+							},
+						},
+					},
+					Status: v1alpha2.AsyncRequestStatus{
+						ExternalRef: "model-789",
+						Response:    v1alpha2.Response{StatusCode: 200, Body: `{"deployedModels": []}`},
+					},
+				},
+			},
+			want: want{
+				err:         errors.New(terminalErrorPrefix + "no UPDATE or PUT mapping is configured but the resource is out of sync (expectedResponseCheck returned false); add an UPDATE mapping or fix the spec so the resource reconciles"),
+				readyStatus: corev1.ConditionFalse,
+				readyReason: xpv2.ReasonUnavailable,
+				readyMsg:    "no UPDATE or PUT mapping is configured",
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -466,6 +596,22 @@ func Test_httpExternal_Observe(t *testing.T) {
 			got, gotErr := e.Observe(context.Background(), tc.args.mg)
 			if diff := cmp.Diff(tc.want.err, gotErr, test.EquateErrors()); diff != "" {
 				t.Fatalf("e.Observe(...): -want error, +got error: %s", diff)
+			}
+			if tc.want.readyReason != "" {
+				cr, ok := tc.args.mg.(*v1alpha2.AsyncRequest)
+				if !ok {
+					t.Fatalf("mg is not an AsyncRequest")
+				}
+				rc := cr.Status.GetCondition(xpv2.TypeReady)
+				if diff := cmp.Diff(tc.want.readyStatus, rc.Status); diff != "" {
+					t.Errorf("Ready status: -want %s, +got %s", tc.want.readyStatus, rc.Status)
+				}
+				if diff := cmp.Diff(tc.want.readyReason, rc.Reason); diff != "" {
+					t.Errorf("Ready reason: -want %s, +got %s", tc.want.readyReason, rc.Reason)
+				}
+				if tc.want.readyMsg != "" && !strings.Contains(rc.Message, tc.want.readyMsg) {
+					t.Errorf("Ready message: want to contain %q, got %q", tc.want.readyMsg, rc.Message)
+				}
 			}
 			if tc.want.err == nil {
 				if diff := cmp.Diff(tc.want.observation.ResourceExists, got.ResourceExists); diff != "" {

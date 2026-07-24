@@ -404,6 +404,91 @@ func Test_isUpToDate(t *testing.T) {
 				err: errors.New("OBSERVE or GET mapping doesn't exist in request, skipping operation"),
 			},
 		},
+		// resourceExistsCheck=false on a parent that always returns 200: the owned sub-resource is
+		// absent, so IsUpToDate reports ErrObjectNotFound -> the controller calls Create(). This is
+		// the Vertex deployedModel fix (bug-observe-always-fires-blocks-create-for-subresources.md).
+		"ResourceExistsCheckFalse_RoutesToCreate": {
+			args: args{
+				http: &MockHttpClient{
+					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+						// Parent endpoint always returns 200; no deployedModel with our externalRef.
+						return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+							StatusCode: 200,
+							Body:       `{"deployedModels": []}`,
+						}}, nil
+					},
+				},
+				localKube: &test.MockClient{
+					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+				},
+				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
+					r.Status.ExternalRef = "model-789"
+					r.Status.Response.StatusCode = 200 // object already observed before
+					r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+						{Method: "POST", Action: "CREATE", URL: ".payload.baseUrl", Body: ".payload.body"},
+						{Method: "GET", Action: "OBSERVE", URL: ".payload.baseUrl"},
+					}
+					r.Spec.ForProvider.ResourceExistsCheck = v1alpha2.ExpectedResponseCheck{
+						Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
+						Logic: `(.response.body.deployedModels // []) as $m | .status.externalRef as $ref | ($m | map(select(.id == $ref)) | length > 0)`,
+					}
+					r.Spec.ForProvider.ExpectedResponseCheck = v1alpha2.ExpectedResponseCheck{
+						Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
+						Logic: `.response.body.deployedModels != null`,
+					}
+				}),
+			},
+			want: want{
+				err: errNotFound,
+			},
+		},
+		// resourceExistsCheck=true (sub-resource present) then expectedResponseCheck=false (drift),
+		// with an UPDATE mapping present: normal drift -> Synced=false (NOT a terminal error).
+		"ResourceExistsCheckTrue_ThenDrift_WithUpdateMapping": {
+			args: args{
+				http: &MockHttpClient{
+					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+						return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+							StatusCode: 200,
+							Body:       `{"deployedModels": [{"id": "model-789"}]}`,
+						}}, nil
+					},
+				},
+				localKube: &test.MockClient{
+					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+				},
+				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
+					r.Status.ExternalRef = "model-789"
+					r.Status.Response.StatusCode = 200
+					r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+						{Method: "POST", Action: "CREATE", URL: ".payload.baseUrl", Body: ".payload.body"},
+						{Method: "GET", Action: "OBSERVE", URL: ".payload.baseUrl"},
+						{Method: "PUT", Action: "UPDATE", URL: ".payload.baseUrl", Body: ".payload.body"},
+					}
+					r.Spec.ForProvider.ResourceExistsCheck = v1alpha2.ExpectedResponseCheck{
+						Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
+						Logic: `(.response.body.deployedModels // []) as $m | .status.externalRef as $ref | ($m | map(select(.id == $ref)) | length > 0)`,
+					}
+					r.Spec.ForProvider.ExpectedResponseCheck = v1alpha2.ExpectedResponseCheck{
+						Type: v1alpha2.ExpectedResponseCheckTypeCustom,
+						// Drift: claim the resource is NOT up to date.
+						Logic: `false`,
+					}
+				}),
+			},
+			want: want{
+				result: ObserveRequestDetails{
+					Synced: false,
+					Details: httpClient.HttpDetails{
+						HttpResponse: httpClient.HttpResponse{
+							StatusCode: 200,
+							Body:       `{"deployedModels": [{"id": "model-789"}]}`,
+						},
+					},
+				},
+				err: nil,
+			},
+		},
 	}
 	for name, tc := range cases {
 		tc := tc // Create local copies of loop variables
@@ -428,6 +513,7 @@ func Test_determineResponseCheck(t *testing.T) {
 		cr          *v1alpha2.AsyncRequest
 		details     httpClient.HttpDetails
 		responseErr error
+		localKube   client.Client
 	}
 
 	type want struct {
@@ -548,14 +634,12 @@ func Test_determineResponseCheck(t *testing.T) {
 				},
 				responseErr: nil,
 			},
+			// Drift detected (CUSTOM check false) with no UPDATE mapping -> terminal error
+			// rather than a silent Synced:false that the reconciler would report as
+			// ReconcileSuccess. See bug-errors-not-propagated-to-status-conditions.md (B).
 			want: want{
 				result: ObserveRequestDetails{
-					Details: httpClient.HttpDetails{
-						HttpResponse: httpClient.HttpResponse{
-							Body: `{"username": "john_doe"}`,
-						},
-					},
-					Synced: false,
+					TerminalError: errUpdateMappingNotFound,
 				},
 				err: nil,
 			},
@@ -593,13 +677,101 @@ func Test_determineResponseCheck(t *testing.T) {
 				err: nil,
 			},
 		},
+		// DEFAULT check with NO UPDATE mapping: the DEFAULT check compares the response to the
+		// UPDATE body, so with no UPDATE mapping it cannot detect drift and reports up-to-date.
+		// This is the intended behavior for create-only resources (CREATE/OBSERVE only) that are
+		// in sync — they are NOT a stuck state and stay Ready=True. The missing-mapping terminal
+		// applies only to the CUSTOM check, which reports drift explicitly.
+		"DefaultCheckNoUpdateMapping_StaysUpToDate": {
+			args: args{
+				ctx: context.Background(),
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
+							Payload: v1alpha2.Payload{
+								Body:    `{"username": "john_doe"}`,
+								BaseUrl: "https://api.example.com/users",
+							},
+							Mappings: []v1alpha2.Mapping{
+								testPostMapping,
+								testGetMapping,
+								testDeleteMapping, // no PUT/UPDATE
+							},
+							ExpectedResponseCheck: v1alpha2.ExpectedResponseCheck{
+								Type: v1alpha2.ExpectedResponseCheckTypeDefault,
+							},
+						},
+					},
+				},
+				details: httpClient.HttpDetails{
+					HttpResponse: httpClient.HttpResponse{
+						Body:       `{"username": "john_doe"}`,
+						Headers:    nil,
+						StatusCode: 200,
+					},
+				},
+				responseErr: nil,
+			},
+			want: want{
+				result: ObserveRequestDetails{
+					Details: httpClient.HttpDetails{
+						HttpResponse: httpClient.HttpResponse{
+							Body:       `{"username": "john_doe"}`,
+							StatusCode: 200,
+						},
+					},
+					Synced: true,
+				},
+				err: nil,
+			},
+		},
+		// CUSTOM check reports drift (false) with NO UPDATE mapping -> terminal error, and it
+		// persists status.polling.terminalError so IsUpToDate short-circuits on the next
+		// reconcile (Gap 3). Asserts the returned terminal (the persisted side-effect is
+		// exercised by the controller test across reconciles).
+		"CustomCheckDriftNoUpdateMapping_PersistsTerminal": {
+			args: args{
+				ctx: context.Background(),
+				cr: &v1alpha2.AsyncRequest{
+					Spec: v1alpha2.AsyncRequestSpec{
+						ForProvider: v1alpha2.AsyncRequestParameters{
+							ExpectedResponseCheck: v1alpha2.ExpectedResponseCheck{
+								Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
+								Logic: `false`,
+							},
+						},
+					},
+				},
+				details: httpClient.HttpDetails{
+					HttpResponse: httpClient.HttpResponse{
+						Body:       `{"username": "john_doe"}`,
+						StatusCode: 200,
+					},
+				},
+				responseErr: nil,
+				localKube: &test.MockClient{
+					MockGet:          test.NewMockGetFn(nil),
+					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+				},
+			},
+			want: want{
+				result: ObserveRequestDetails{
+					TerminalError: errUpdateMappingNotFound,
+				},
+				err: nil,
+			},
+		},
 	}
 
 	for name, tc := range cases {
 		tc := tc // Create local copies of loop variables
 
 		t.Run(name, func(t *testing.T) {
-			svcCtx := service.NewServiceContext(tc.args.ctx, nil, logging.NewNopLogger(), nil, nil)
+			localKube := tc.args.localKube
+			if localKube == nil {
+				localKube = &test.MockClient{MockGet: test.NewMockGetFn(nil), MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil)}
+			}
+			svcCtx := service.NewServiceContext(tc.args.ctx, localKube, logging.NewNopLogger(), nil, nil)
 			crCtx := service.NewRequestCRContext(tc.args.cr)
 			got, gotErr := determineIfUpToDate(svcCtx, crCtx, tc.args.details, tc.args.responseErr)
 			if diff := cmp.Diff(tc.want.err, gotErr, test.EquateErrors()); diff != "" {

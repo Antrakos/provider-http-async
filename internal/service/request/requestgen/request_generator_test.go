@@ -403,6 +403,7 @@ func Test_generateRequestObject(t *testing.T) {
 						"type":  v1alpha2.ExpectedResponseCheckTypeCustom,
 						"logic": "logic example",
 					},
+					"resourceExistsCheck": map[string]any{},
 					"mappings": []any{
 						map[string]any{
 							"body":   "{ username: .payload.body.username, email: .payload.body.email }",

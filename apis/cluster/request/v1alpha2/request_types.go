@@ -74,6 +74,27 @@ type AsyncRequestParameters struct {
 	// ExpectedResponseCheck specifies the mechanism to validate the OBSERVE response against expected value.
 	ExpectedResponseCheck ExpectedResponseCheck `json:"expectedResponseCheck,omitempty"`
 
+	// ResourceExistsCheck optionally decouples existence detection from drift
+	// detection for a sub-resource embedded in a parent OBSERVE response that always
+	// returns 2xx (e.g. a Vertex AI deployedModel observed via its parent endpoint,
+	// which returns 200 whether or not any model is deployed to it).
+	//
+	// It is a CUSTOM jq expression evaluated against the OBSERVE response (with
+	// .status.externalRef available), after the in-flight anchor gate and before
+	// expectedResponseCheck. When it returns false the reconciler creates the
+	// resource; when true, expectedResponseCheck determines drift.
+	//
+	// The DEFAULT type (and an unset field) keep the default behavior: existence is
+	// inferred from the OBSERVE HTTP status. A non-2xx response on a first observe
+	// (no externalRef, no prior response) already routes to CREATE, and an
+	// isRemovedCheck 404 routes to delete — both fire before this check, so
+	// resourceExistsCheck only applies on a 2xx response, which is precisely the
+	// case the default inference cannot answer (the parent's 200 does not tell you
+	// whether the sub-resource you own is present). There is no DEFAULT jq logic
+	// because the default is not a jq expression — it is the HTTP-status inference
+	// above. This field is therefore only meaningful with type CUSTOM.
+	ResourceExistsCheck ExpectedResponseCheck `json:"resourceExistsCheck,omitempty"`
+
 	// IsRemovedCheck specifies the mechanism to validate the OBSERVE response after removal against expected value.
 	IsRemovedCheck ExpectedResponseCheck `json:"isRemovedCheck,omitempty"`
 

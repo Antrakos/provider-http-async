@@ -12,6 +12,7 @@ import (
 	datapatcher "github.com/Antrakos/provider-http-async/internal/data-patcher"
 	"github.com/Antrakos/provider-http-async/internal/service"
 	"github.com/Antrakos/provider-http-async/internal/service/request/observe"
+	"github.com/Antrakos/provider-http-async/internal/service/request/polling"
 	"github.com/Antrakos/provider-http-async/internal/service/request/requestgen"
 	"github.com/Antrakos/provider-http-async/internal/service/request/requestmapping"
 	"github.com/Antrakos/provider-http-async/internal/utils"
@@ -21,6 +22,14 @@ const (
 	errNotValidJSON              = "%s is not a valid JSON string: %s"
 	errConvertResToMap           = "failed to convert response to map"
 	errExpectedResponseCheckType = "%s.Type should be either DEFAULT, CUSTOM or empty"
+
+	// errUpdateMappingNotFound is the terminal message surfaced when OBSERVE
+	// determines the resource is out of sync (expectedResponseCheck: false) but
+	// no UPDATE or PUT mapping is configured. The reconciler would otherwise
+	// silently skip the update and report ReconcileSuccess, hiding the stuck
+	// state. Surfacing it as a terminal error makes both conditions honest:
+	// Ready=False (Terminal error: ...) and Synced=False (reconcile error).
+	errUpdateMappingNotFound = "no UPDATE or PUT mapping is configured but the resource is out of sync (expectedResponseCheck returned false); add an UPDATE mapping or fix the spec so the resource reconciles"
 )
 
 type ObserveRequestDetails struct {
@@ -30,9 +39,13 @@ type ObserveRequestDetails struct {
 	// TerminalError, when non-empty, means the resource is in a stable terminal
 	// failure state (a prior poll failed with polling.error non-null, and the spec
 	// has not changed since). The controller must report the resource unhealthy
-	// (Ready=False) but must NOT re-trigger Create/Update — hence Synced is reported
-	// true so the managed reconciler treats it as up-to-date and takes no action.
+	// (Ready=False) and must NOT re-trigger Create/Update — it returns this message
+	// as a Go error so the managed reconciler reports Synced=False and persists it.
 	TerminalError string
+	// InFlight is true when a long-running operation poll is in progress
+	// (status.polling.response != nil). The resource is not settled, so the
+	// controller reports Ready=False rather than Available.
+	InFlight bool
 }
 
 // NewObserveRequestDetails is a constructor function that initializes
@@ -46,11 +59,21 @@ func NewObserve(details httpClient.HttpDetails, resErr error, synced bool) Obser
 }
 
 // NewTerminalObserve returns an observation representing a stable terminal failure:
-// up-to-date (no Create/Update) but unhealthy, carrying the failure message.
+// unhealthy, carrying the failure message. The controller surfaces it as Ready=False
+// and returns it as an error so the reconciler reports Synced=False.
 func NewTerminalObserve(terminalErr string) ObserveRequestDetails {
 	return ObserveRequestDetails{
-		Synced:        true,
 		TerminalError: terminalErr,
+	}
+}
+
+// NewInFlightObserve returns an observation representing an in-flight long-running
+// operation: not up to date (the controller re-enters DeployAction to resume the poll)
+// and not settled (the controller reports Ready=False rather than Available).
+func NewInFlightObserve() ObserveRequestDetails {
+	return ObserveRequestDetails{
+		Synced:   false,
+		InFlight: true,
 	}
 }
 
@@ -105,7 +128,9 @@ func IsUpToDate(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext)
 		// externalRef is set: an UPDATE/REMOVE LRO is in flight (or a re-poll after a
 		// completed operation). Report not-up-to-date so the controller calls Update() /
 		// holds the finalizer for Delete(), whose URLs resolve via .status.externalRef.
-		return NewObserve(httpClient.HttpDetails{}, nil, false), nil
+		// InFlight signals the controller to report Ready=False (still settling) rather
+		// than Available.
+		return NewInFlightObserve(), nil
 	}
 
 	spec := crCtx.Spec()
@@ -141,6 +166,25 @@ func IsUpToDate(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext)
 		return FailedObserve(), err
 	}
 
+	// resourceExistsCheck (optional): decouples existence from drift for sub-resources
+	// embedded in a parent OBSERVE response that always returns 2xx. When configured,
+	// evaluate it against the OBSERVE response before drift detection. A false result
+	// means the owned sub-resource is absent → CREATE (same signal the controller maps to
+	// ResourceExists:false). A true result falls through to expectedResponseCheck (drift).
+	// This is evaluated inside the OBSERVE path, after the in-flight anchor gate above, so
+	// it never races an in-flight operation (which returns earlier).
+	if existsChecker := observe.GetResourceExistsResponseCheck(spec); existsChecker != nil {
+		exists, err := existsChecker.Check(svcCtx, crCtx, details, responseErr)
+		if err != nil {
+			return FailedObserve(), err
+		}
+		if !exists {
+			// The sub-resource is absent even though the parent returned 2xx → CREATE.
+			return FailedObserve(), errors.New(observe.ErrObjectNotFound)
+		}
+		// Exists: fall through to drift detection below.
+	}
+
 	// Apply response data to secrets and update CR status with response
 	secretConfigs := spec.GetSecretInjectionConfigs()
 	datapatcher.ApplyResponseDataToSecrets(svcCtx.Ctx, svcCtx.LocalKube, svcCtx.Logger, &details.HttpResponse, secretConfigs, crCtx.GetCR())
@@ -148,6 +192,9 @@ func IsUpToDate(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext)
 }
 
 // determineIfUpToDate determines if the object is up to date based on the response check.
+// When the resource is out of sync (expectedResponseCheck: false) and no UPDATE/PUT mapping
+// exists, it surfaces a terminal error instead of letting the reconciler silently skip the
+// update and report ReconcileSuccess (which hides the stuck state).
 func determineIfUpToDate(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext, details httpClient.HttpDetails, responseErr error) (ObserveRequestDetails, error) {
 	responseChecker := observe.GetIsUpToDateResponseCheck(svcCtx, crCtx.Spec())
 	if responseChecker == nil {
@@ -157,6 +204,28 @@ func determineIfUpToDate(svcCtx *service.ServiceContext, crCtx *service.RequestC
 	result, err := responseChecker.Check(svcCtx, crCtx, details, responseErr)
 	if err != nil {
 		return FailedObserve(), err
+	}
+
+	// Drift detected: the controller will call Update(). If there is no UPDATE/PUT
+	// mapping, DeployAction would log "skipping operation" and return nil, and the
+	// reconciler would report ReconcileSuccess — hiding a permanently stuck state. Surface
+	// it as a terminal error so the controller reports Ready=False and returns an error
+	// (→ Synced=False) instead. This applies to the CUSTOM check, which explicitly reports
+	// drift (expectedResponseCheck: false). The DEFAULT check compares the response to the
+	// UPDATE body, so with no UPDATE mapping it cannot detect drift and reports up-to-date
+	// — the intended behavior for create-only resources (CREATE/OBSERVE only) that are in
+	// sync; those are not a stuck state and must stay Ready=True. Persisting the terminal
+	// (terminalError + observedGeneration) makes it stable: IsUpToDate short-circuits on the
+	// next reconcile via GetTerminalError() and stops re-firing OBSERVE, and a spec change
+	// (e.g. adding an UPDATE mapping) bumps the generation, clears the terminal via
+	// clearTerminalError, and re-evaluates — the same recovery path as a poll terminal.
+	if !result {
+		if _, mapErr := requestmapping.GetMapping(crCtx.Spec(), common.ActionUpdate, svcCtx.Logger); mapErr != nil {
+			if persistErr := polling.SetTerminalFailure(svcCtx, crCtx, errUpdateMappingNotFound); persistErr != nil {
+				return FailedObserve(), persistErr
+			}
+			return NewTerminalObserve(errUpdateMappingNotFound), nil
+		}
 	}
 
 	return NewObserve(details, responseErr, result), nil
