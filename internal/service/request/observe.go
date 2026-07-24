@@ -63,9 +63,17 @@ func FailedObserve() ObserveRequestDetails {
 }
 
 // IsUpToDate checks whether desired spec up to date with the observed state for a given request.
-// When operationRef is non-empty an async mutate LRO is still in flight; OBSERVE must not fire
-// because externalRef may not yet be written. Return ResourceUpToDate=false so the reconciler
-// calls Create/Update (which will resume the poll loop via resumeURL) instead.
+// When a polling.response anchor is present an async mutate LRO is still in flight; OBSERVE must
+// not fire because externalRef may not yet be written. The resume is routed back to DeployAction:
+//
+//   - If externalRef is not yet set (the operation has not completed — the CREATE+poll case),
+//     report ErrObjectNotFound so the controller calls Create() and resumes via the CREATE
+//     mapping. This matters for resources that declare no UPDATE mapping (e.g. Vertex AI
+//     deployedModel, which has only CREATE/OBSERVE/REMOVE): routing through Update() would hit
+//     a missing UPDATE mapping and the poll would never resume.
+//   - If externalRef is set (an UPDATE/REMOVE LRO in flight, or a re-poll after completion was
+//     interrupted), report not-up-to-date so the controller calls Update() (or holds the
+//     finalizer for Delete), whose mappings resolve via .status.externalRef.
 func IsUpToDate(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext) (ObserveRequestDetails, error) {
 	status := crCtx.Status()
 
@@ -85,9 +93,18 @@ func IsUpToDate(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext)
 		}
 	}
 
-	if status.GetOperationRef() != "" {
-		// LRO in flight — report not-up-to-date so the reconciler re-enters DeployAction to
-		// resume the poll loop. Do not trigger an OBSERVE call; externalRef may be empty.
+	if status.GetPollingResponse() != nil {
+		// LRO in flight — do not trigger an OBSERVE call; externalRef may be empty. Route the
+		// resume back to DeployAction.
+		if status.GetExternalRefValue() == "" {
+			// No externalRef yet: the CREATE+poll operation is still running. Report the
+			// resource as not-existing so the controller calls Create() (the CREATE mapping
+			// always exists for a pollable resource) and resumes the poll via the anchor.
+			return FailedObserve(), errors.New(observe.ErrObjectNotFound)
+		}
+		// externalRef is set: an UPDATE/REMOVE LRO is in flight (or a re-poll after a
+		// completed operation). Report not-up-to-date so the controller calls Update() /
+		// holds the finalizer for Delete(), whose URLs resolve via .status.externalRef.
 		return NewObserve(httpClient.HttpDetails{}, nil, false), nil
 	}
 
@@ -156,7 +173,10 @@ func determineIfRemoved(svcCtx *service.ServiceContext, crCtx *service.RequestCR
 }
 
 // clearTerminalError clears the terminal failure message so a spec-changed resource can be
-// reconciled again. RetryOnConflict handles optimistic-lock conflicts from concurrent reconciles.
+// reconciled again, and resets the poll StartedAt so the resumed operation gets a fresh
+// polling.timeout budget (e.g. raising polling.timeout after a timeout then resumes with
+// now + newTimeout rather than oldStart + newTimeout). RetryOnConflict handles optimistic-lock
+// conflicts from concurrent reconciles.
 func clearTerminalError(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext) error {
 	resource := crCtx.GetCR()
 	nn := types.NamespacedName{Name: resource.GetName(), Namespace: resource.GetNamespace()}
@@ -164,7 +184,9 @@ func clearTerminalError(svcCtx *service.ServiceContext, crCtx *service.RequestCR
 		if err := svcCtx.LocalKube.Get(svcCtx.Ctx, nn, resource); err != nil {
 			return errors.Wrap(err, "failed to get resource before clearing terminal error")
 		}
-		crCtx.StatusWriter().SetTerminalError("")
+		sw := crCtx.StatusWriter()
+		sw.SetTerminalError("")
+		sw.SetOperationStartedAt(nil)
 		return svcCtx.LocalKube.Status().Update(svcCtx.Ctx, resource)
 	})
 }

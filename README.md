@@ -37,22 +37,30 @@ mappings:
 ```
 
 The reconciler drives the poll loop in the foreground for up to 2 minutes per reconcile
-iteration, then requeues. `status.operationRef` is the crash-recovery anchor — a
-reconcile that finds it non-empty resumes the in-flight operation instead of re-firing
-the mutate call.
+iteration, then requeues. `status.polling.response` is the crash-recovery anchor — the
+raw mutate response, persisted before the first poll. A reconcile that finds it set
+resumes the in-flight operation (recomputing `polling.url` against it) instead of
+re-firing the mutate call, and the anchor is retained across a terminal poll failure so
+a corrected `polling.url` resumes the existing operation rather than creating a
+duplicate. It is cleared only when the operation completes (or the resource is deleted).
 
-> **`polling.url` must resolve to an absolute URL.** The resolved value is used verbatim
-> as the poll GET target, so it must include a scheme and host
+> **`polling.url` must resolve to an absolute URL.** The resolved value is recomputed
+> from the mutate response on every reconcile, so it must include a scheme and host
 > (`https://host/path`). Many GCP LRO APIs (Vertex AI `models:upload`, `endpoints`,
 > `deployModel`, …) return `name` as a **bare resource path** such as
 > `projects/123/locations/us-central1/operations/789`, not a full URL. Writing
 > `url: .response.body.name` therefore yields a scheme-less string that fails with
 > `unsupported protocol scheme ""`. Prepend the base URL as shown above. If the
-> expression resolves to a non-absolute URL the provider stops with a **terminal
-> failure** (`Synced=False`) and a descriptive message instead of retrying — it does
-> **not** re-fire CREATE, so no duplicate remote resource is minted.
+> expression resolves to a non-absolute (or empty) value the provider stops with a
+> **terminal failure** (`Synced=False`) and a descriptive message instead of retrying —
+> the anchor is retained, so fixing the expression and bumping the generation resumes
+> polling and it does **not** re-fire CREATE, so no duplicate remote resource is minted.
 
-### External reference
+> **Only add `polling` to a mapping whose API returns a long-running operation.** If the
+> operation completes synchronously its response carries no operation identifier, so
+> `polling.url` resolves to an empty value — a terminal failure with a message steering
+> you to remove the `polling` block. Removing it (a spec change) clears the terminal
+> state and the resource reconciles synchronously.
 
 `externalRef` is a top-level jq expression that extracts the stable identifier of the
 remote resource after the operation completes. For async APIs it is evaluated against

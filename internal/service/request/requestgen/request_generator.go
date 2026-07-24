@@ -23,8 +23,8 @@ type RequestDetails struct {
 }
 
 // GenerateRequestDetails generates request details.
-// status may be nil; when non-nil it exposes .status (externalRef/operationRef) to
-// the URL, body, and header jq expressions, as required by the PRD jq-context contract.
+// status may be nil; when non-nil it exposes .status.externalRef to the URL, body,
+// and header jq expressions, as required by the PRD jq-context contract.
 func GenerateRequestDetails(svcCtx *service.ServiceContext, methodMapping interfaces.HTTPMapping, forProvider interfaces.MappedHTTPRequestSpec, status interfaces.RequestStatusReader, response interfaces.HTTPResponse) (RequestDetails, error, bool) {
 	patchedResponse, err := datapatcher.PatchSecretsIntoResponse(svcCtx.Ctx, svcCtx.LocalKube, response, svcCtx.Logger)
 	if err != nil {
@@ -78,8 +78,7 @@ func GenerateRequestContextForPoll(
 
 	if status != nil {
 		statusMap := map[string]interface{}{
-			"externalRef":  status.GetExternalRefValue(),
-			"operationRef": status.GetOperationRef(),
+			"externalRef": status.GetExternalRefValue(),
 		}
 		baseMap["status"] = statusMap
 	}
@@ -121,8 +120,7 @@ func GenerateRequestContextFromMap(
 
 	if status != nil {
 		baseMap["status"] = map[string]interface{}{
-			"externalRef":  status.GetExternalRefValue(),
-			"operationRef": status.GetOperationRef(),
+			"externalRef": status.GetExternalRefValue(),
 		}
 	}
 

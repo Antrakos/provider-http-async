@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,7 +105,7 @@ func TestPoll_DoneAfterTwoIterations(t *testing.T) {
 	mapping := buildMapping(srv)
 
 	p := New()
-	result, err := p.Poll(svcCtx, crCtx, mapping, nil, "")
+	result, err := p.Poll(svcCtx, crCtx, mapping, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -137,7 +138,7 @@ func TestPoll_TerminalError(t *testing.T) {
 	mapping := buildMapping(srv)
 
 	p := New()
-	result, err := p.Poll(svcCtx, crCtx, mapping, nil, "")
+	result, err := p.Poll(svcCtx, crCtx, mapping, nil)
 	if err != nil {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
@@ -149,8 +150,11 @@ func TestPoll_TerminalError(t *testing.T) {
 	}
 }
 
-func TestPoll_ResumeURL_SkipsMutate(t *testing.T) {
-	// The poll server reports done immediately.
+// TestPoll_Resume_RecomputesURL verifies that on a resume (anchor persisted) the poll
+// URL is recomputed from the mutate response rather than frozen. The polling.url
+// expression derives the URL from .response.body.name, and the persisted mutate response
+// carries that name — so the same URL is re-derived and the operation completes.
+func TestPoll_Resume_RecomputesURL(t *testing.T) {
 	srv, calls := operationServer(t, 1)
 	defer srv.Close()
 
@@ -158,28 +162,44 @@ func TestPoll_ResumeURL_SkipsMutate(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "test-resume", Namespace: "default"},
 	}
 	cr.Spec.ForProvider = clusterv1alpha2.AsyncRequestParameters{
-		Payload:  clusterv1alpha2.Payload{BaseUrl: "https://example.com"},
-		Mappings: []clusterv1alpha2.Mapping{*buildMapping(srv)},
+		Payload: clusterv1alpha2.Payload{BaseUrl: "https://example.com"},
+		Mappings: []clusterv1alpha2.Mapping{{
+			Method: "POST",
+			Action: common.ActionCreate,
+			URL:    ".payload.baseUrl",
+			Polling: &common.Polling{
+				// Derive the poll URL from the mutate response name — recomputed each call.
+				// jq: "<srv.URL>" + "/" + .response.body.name
+				URL:      fmt.Sprintf(`"%s" + "/" + .response.body.name`, srv.URL),
+				Done:     ".poll.response.body.done == true",
+				Interval: &metav1.Duration{Duration: 1 * time.Millisecond},
+				Timeout:  &metav1.Duration{Duration: 30 * time.Minute},
+			},
+		}},
 	}
 
 	kube := buildFakeKube(cr)
 	svcCtx := buildSvcCtx(t, kube, buildHTTPClient(t))
 	crCtx := buildCRCtx(cr)
-	mapping := buildMapping(srv)
+	mapping := &cr.Spec.ForProvider.Mappings[0]
+
+	// The mutate response carries the operation name; the poll URL is derived from it.
+	mutateResponse := map[string]interface{}{
+		"body": map[string]interface{}{"name": "op-789"},
+	}
 
 	p := New()
-	// Pass resumeURL directly — polling.url jq expression is not evaluated.
-	result, err := p.Poll(svcCtx, crCtx, mapping, nil, srv.URL)
+	result, err := p.Poll(svcCtx, crCtx, mapping, mutateResponse)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !result.Done {
 		t.Error("expected Done=true")
 	}
-	if result.OperationURL != srv.URL {
-		t.Errorf("expected OperationURL=%s, got %s", srv.URL, result.OperationURL)
+	if !strings.HasSuffix(result.OperationURL, "/op-789") {
+		t.Errorf("expected OperationURL to be recomputed from .response.body.name (suffix /op-789), got %s", result.OperationURL)
 	}
-	_ = calls // we know it was hit at least once
+	_ = calls
 }
 
 func TestPoll_Timeout(t *testing.T) {
@@ -218,9 +238,12 @@ func TestPoll_Timeout(t *testing.T) {
 	crCtx := buildCRCtx(cr)
 
 	p := New()
-	_, err := p.Poll(svcCtx, crCtx, mapping, nil, srv.URL)
-	if err == nil {
-		t.Error("expected timeout error")
+	result, err := p.Poll(svcCtx, crCtx, mapping, nil)
+	if err != nil {
+		t.Fatalf("unexpected Go error (timeout is now terminal, not a Go error): %v", err)
+	}
+	if result.TerminalErr == "" {
+		t.Error("expected terminal timeout failure")
 	}
 }
 
@@ -262,7 +285,7 @@ func TestPoll_BarePathURL_TerminalError(t *testing.T) {
 	}
 
 	p := New()
-	result, err := p.Poll(svcCtx, crCtx, mapping, mutateResponse, "")
+	result, err := p.Poll(svcCtx, crCtx, mapping, mutateResponse)
 	if err != nil {
 		t.Fatalf("expected nil Go error (terminal failure), got: %v", err)
 	}
@@ -272,9 +295,55 @@ func TestPoll_BarePathURL_TerminalError(t *testing.T) {
 	if result.Done {
 		t.Error("Done should be false on terminal error")
 	}
-	// operationRef must not be persisted for an unpollable URL.
-	if cr.Status.Polling.OperationRef != "" {
-		t.Errorf("expected operationRef to remain empty, got %q", cr.Status.Polling.OperationRef)
+}
+
+// TestPoll_EmptyURL_SyncOpTerminalError verifies that a polling.url resolving to an
+// empty value (a `polling` block mis-attached to a synchronous operation whose response
+// carries no LRO identifier) is reported as a terminal failure steering the user to
+// remove the polling block.
+func TestPoll_EmptyURL_SyncOpTerminalError(t *testing.T) {
+	interval := metav1.Duration{Duration: 1 * time.Millisecond}
+	timeout := metav1.Duration{Duration: 30 * time.Minute}
+	mapping := &clusterv1alpha2.Mapping{
+		Method: "POST",
+		Action: common.ActionCreate,
+		URL:    ".payload.baseUrl",
+		Polling: &common.Polling{
+			// A synchronous response has no operation name, so this yields empty.
+			URL:      `(.response.body.name // "")`,
+			Done:     ".poll.response.body.done == true",
+			Interval: &interval,
+			Timeout:  &timeout,
+		},
+	}
+
+	cr := &clusterv1alpha2.AsyncRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-emptyurl", Namespace: "default"},
+	}
+	cr.Spec.ForProvider = clusterv1alpha2.AsyncRequestParameters{
+		Payload:  clusterv1alpha2.Payload{BaseUrl: "https://example.com"},
+		Mappings: []clusterv1alpha2.Mapping{*mapping},
+	}
+
+	kube := buildFakeKube(cr)
+	svcCtx := buildSvcCtx(t, kube, buildHTTPClient(t))
+	crCtx := buildCRCtx(cr)
+
+	// Synchronous response: no `name` field.
+	mutateResponse := map[string]interface{}{
+		"body": map[string]interface{}{"id": "model-1"},
+	}
+
+	p := New()
+	result, err := p.Poll(svcCtx, crCtx, mapping, mutateResponse)
+	if err != nil {
+		t.Fatalf("expected nil Go error (terminal failure), got: %v", err)
+	}
+	if result.TerminalErr == "" {
+		t.Fatal("expected TerminalErr for an empty polling.url")
+	}
+	if !strings.Contains(result.TerminalErr, "synchronous") {
+		t.Errorf("expected terminal message to steer toward removing the polling block, got: %q", result.TerminalErr)
 	}
 }
 
@@ -306,7 +375,8 @@ func TestValidateOperationURL(t *testing.T) {
 }
 
 // TestPoll_Timeout_CrossReconcile verifies that a CR with OperationStartedAt already in
-// the past (beyond timeout) times out immediately without making any poll GET.
+// the past (beyond timeout) times out immediately (as a terminal failure) without
+// making any poll GET.
 func TestPoll_Timeout_CrossReconcile(t *testing.T) {
 	// Server that would be queried if the timeout check failed — we track calls.
 	calls := 0
@@ -341,7 +411,6 @@ func TestPoll_Timeout_CrossReconcile(t *testing.T) {
 		Payload:  clusterv1alpha2.Payload{BaseUrl: "https://example.com"},
 		Mappings: []clusterv1alpha2.Mapping{*mapping},
 	}
-	cr.Status.Polling.OperationRef = srv.URL
 	cr.Status.Polling.StartedAt = &startedAt
 
 	kube := buildFakeKube(cr)
@@ -349,73 +418,29 @@ func TestPoll_Timeout_CrossReconcile(t *testing.T) {
 	crCtx := buildCRCtx(cr)
 
 	p := New()
-	_, err := p.Poll(svcCtx, crCtx, mapping, nil, srv.URL)
-	if err == nil {
-		t.Error("expected timeout error for already-expired operation")
+	result, err := p.Poll(svcCtx, crCtx, mapping, nil)
+	if err != nil {
+		t.Fatalf("unexpected Go error (timeout is terminal): %v", err)
+	}
+	if result.TerminalErr == "" {
+		t.Error("expected terminal timeout failure for already-expired operation")
 	}
 	if calls > 0 {
 		t.Errorf("expected no poll GET calls before timeout check, got %d", calls)
 	}
 }
 
-// TestPersistOperationRef_SetsStartTimeOnFirstEntry verifies that persistOperationRef
-// sets OperationStartedAt when it is not yet set, and does not overwrite it on resume.
-func TestPersistOperationRef_SetsStartTimeOnFirstEntry(t *testing.T) {
-	cr := &clusterv1alpha2.AsyncRequest{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-persist", Namespace: "default"},
-	}
-	kube := buildFakeKube(cr)
-	svcCtx := buildSvcCtx(t, kube, buildHTTPClient(t))
-	crCtx := buildCRCtx(cr)
-
-	if err := persistOperationRef(svcCtx, crCtx, "https://example.com/op/1"); err != nil {
-		t.Fatalf("persistOperationRef failed: %v", err)
-	}
-	firstTime := cr.Status.Polling.StartedAt
-	if firstTime == nil {
-		t.Fatal("expected OperationStartedAt to be set after first persistOperationRef call")
-	}
-
-	// Second call (resume scenario): start time must not be overwritten.
-	if err := persistOperationRef(svcCtx, crCtx, "https://example.com/op/1"); err != nil {
-		t.Fatalf("second persistOperationRef failed: %v", err)
-	}
-	if cr.Status.Polling.StartedAt == nil || !cr.Status.Polling.StartedAt.Equal(firstTime) {
-		t.Error("OperationStartedAt was overwritten on resume; expected it to be preserved")
-	}
-}
-
-// TestClearOperationRef_ClearsStartTime verifies that ClearOperationRef also clears OperationStartedAt.
-func TestClearOperationRef_ClearsStartTime(t *testing.T) {
+// TestSetTerminalFailure_PreservesAnchor verifies the crux inversion: SetTerminalFailure
+// must PRESERVE the polling.response anchor (and StartedAt) so a corrected polling.url
+// resumes the in-flight operation instead of re-creating it. Only the terminal message
+// and observedGeneration are written.
+func TestSetTerminalFailure_PreservesAnchor(t *testing.T) {
 	startedAt := metav1.Now()
+	anchor := map[string]interface{}{"body": map[string]interface{}{"name": "op-1"}}
 	cr := &clusterv1alpha2.AsyncRequest{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-clear", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "test-terminal-preserve", Namespace: "default"},
 	}
-	cr.Status.Polling.OperationRef = "https://example.com/op/1"
-	cr.Status.Polling.StartedAt = &startedAt
-
-	kube := buildFakeKube(cr)
-	svcCtx := buildSvcCtx(t, kube, buildHTTPClient(t))
-	crCtx := buildCRCtx(cr)
-
-	if err := ClearOperationRef(svcCtx, crCtx); err != nil {
-		t.Fatalf("ClearOperationRef failed: %v", err)
-	}
-	if cr.Status.Polling.OperationRef != "" {
-		t.Error("expected OperationRef to be cleared")
-	}
-	if cr.Status.Polling.StartedAt != nil {
-		t.Error("expected OperationStartedAt to be cleared")
-	}
-}
-
-// TestSetTerminalFailure_ClearsStartTime verifies that SetTerminalFailure clears OperationStartedAt.
-func TestSetTerminalFailure_ClearsStartTime(t *testing.T) {
-	startedAt := metav1.Now()
-	cr := &clusterv1alpha2.AsyncRequest{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-terminal-clear", Namespace: "default"},
-	}
-	cr.Status.Polling.OperationRef = "https://example.com/op/1"
+	cr.SetPollingResponse(anchor)
 	cr.Status.Polling.StartedAt = &startedAt
 
 	kube := buildFakeKube(cr)
@@ -425,11 +450,19 @@ func TestSetTerminalFailure_ClearsStartTime(t *testing.T) {
 	if err := SetTerminalFailure(svcCtx, crCtx, "quota exceeded"); err != nil {
 		t.Fatalf("SetTerminalFailure failed: %v", err)
 	}
-	if cr.Status.Polling.OperationRef != "" {
-		t.Error("expected OperationRef to be cleared")
+	// The anchor must survive a terminal failure.
+	if cr.Status.Polling.Response == nil {
+		t.Fatal("expected polling.response anchor to be PRESERVED across terminal failure")
 	}
-	if cr.Status.Polling.StartedAt != nil {
-		t.Error("expected OperationStartedAt to be cleared")
+	if cr.Status.Polling.StartedAt == nil {
+		t.Fatal("expected OperationStartedAt to be PRESERVED across terminal failure")
+	}
+	// The fake client round-trips status through JSON, which drops the sub-second
+	// and monotonic clock reading; compare wall time truncated to the second rather
+	// than metav1.Time.Equal, which treats those differences as inequality.
+	if !cr.Status.Polling.StartedAt.Truncate(time.Second).Equal(startedAt.Truncate(time.Second)) {
+		t.Errorf("expected OperationStartedAt wall time unchanged, got %v want %v",
+			cr.Status.Polling.StartedAt.Time, startedAt.Time)
 	}
 	if cr.Status.Polling.TerminalError == "" {
 		t.Error("expected TerminalError to be set")

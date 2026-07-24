@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
+	"github.com/Antrakos/provider-http-async/apis/common"
 	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
 	"github.com/Antrakos/provider-http-async/internal/service"
 	"github.com/Antrakos/provider-http-async/internal/service/request/observe"
@@ -830,5 +831,100 @@ func Test_requestDetails(t *testing.T) {
 				t.Fatalf("requestDetails(...): -want result, +got result: %s", diff)
 			}
 		})
+	}
+}
+
+// TestIsUpToDate_InFlightAnchor_Routing covers the Gap-1 resume-routing fix: when a
+// polling.response anchor is in flight, IsUpToDate must not fire OBSERVE and must route
+// the resume back to DeployAction via the right controller action.
+func TestIsUpToDate_InFlightAnchor_Routing(t *testing.T) {
+	// A resource whose CREATE mapping polls and whose OBSERVE/UPDATE URLs depend on
+	// .status.externalRef — the Vertex deployedModel shape (no UPDATE mapping would also
+	// exercise this, but here we keep UPDATE to prove the externalRef gate, not the
+	// mapping lookup, drives routing).
+	buildCR := func(setExternalRef bool) *v1alpha2.AsyncRequest {
+		cr := httpRequest()
+		cr.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+			{Method: "POST", Action: "CREATE", URL: ".payload.baseUrl", Polling: &common.Polling{URL: ".response.body.name", Done: ".poll.response.body.done == true"}},
+			{Method: "GET", Action: "OBSERVE", URL: ".payload.baseUrl + \"/\" + .status.externalRef"},
+		}
+		cr.SetPollingResponse(map[string]interface{}{"body": map[string]interface{}{"name": "op-1"}})
+		if setExternalRef {
+			cr.Status.ExternalRef = "model-789"
+		}
+		return cr
+	}
+
+	t.Run("NoExternalRef_ReturnsObjectNotFound_RoutesToCreate", func(t *testing.T) {
+		// CREATE+poll still running: externalRef unset → ErrObjectNotFound so the controller
+		// calls Create() and resumes the poll via the CREATE mapping. This is the case that
+		// breaks for no-UPDATE-mapping resources if routed through Update().
+		cr := buildCR(false)
+		svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
+			MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				t.Errorf("OBSERVE must not fire while the anchor is in flight; got %s %s", method, url)
+				return httpClient.HttpDetails{}, nil
+			},
+		}, nil)
+		_, err := IsUpToDate(svcCtx, service.NewRequestCRContext(cr))
+		if err == nil || err.Error() != observe.ErrObjectNotFound {
+			t.Fatalf("expected ErrObjectNotFound to route resume through Create(), got %v", err)
+		}
+	})
+
+	t.Run("ExternalRefSet_ReturnsNotUpToDate_RoutesToUpdateOrDelete", func(t *testing.T) {
+		// An UPDATE/REMOVE LRO is in flight with externalRef already resolved: report
+		// not-up-to-date so the controller calls Update() / holds the finalizer for Delete(),
+		// whose URLs resolve via .status.externalRef.
+		cr := buildCR(true)
+		svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
+			MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				t.Errorf("OBSERVE must not fire while the anchor is in flight; got %s %s", method, url)
+				return httpClient.HttpDetails{}, nil
+			},
+		}, nil)
+		got, err := IsUpToDate(svcCtx, service.NewRequestCRContext(cr))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.Synced {
+			t.Error("expected Synced=false (not up to date) so the controller re-enters DeployAction")
+		}
+	})
+}
+
+// TestIsUpToDate_TerminalClear_ResetsStartedAt covers Gap 2 and Gap 5: a spec change
+// (generation drift past a terminal failure) clears TerminalError and resets StartedAt so
+// the resumed operation gets a fresh polling.timeout budget, then falls through to resume.
+func TestIsUpToDate_TerminalClear_ResetsStartedAt(t *testing.T) {
+	startedAt := v1.Now()
+	cr := httpRequest()
+	cr.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+		{Method: "POST", Action: "CREATE", URL: ".payload.baseUrl", Polling: &common.Polling{URL: ".response.body.name", Done: ".poll.response.body.done == true"}},
+		{Method: "GET", Action: "OBSERVE", URL: ".payload.baseUrl + \"/\" + .status.externalRef"},
+	}
+	// Terminal failure recorded at generation 1 with a stale StartedAt.
+	cr.Status.Polling.TerminalError = "polling timeout after 30s for operation op-1"
+	cr.Status.Polling.StartedAt = &startedAt
+	cr.Status.SetObservedGeneration(1)
+	cr.Generation = 2 // spec changed since the terminal failure → generation drift
+	// No anchor set here so IsUpToDate falls through to a normal observe after the clear;
+	// the assertion is solely about the clear side-effects.
+	cr.Status.Response = v1alpha2.Response{StatusCode: 0, Body: ""}
+
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			// OBSERVE GET for an uncreated resource: returns 404 → ErrObjectNotFound.
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: http.StatusNotFound}}, nil
+		},
+	}, nil)
+
+	_, _ = IsUpToDate(svcCtx, service.NewRequestCRContext(cr))
+
+	if cr.Status.Polling.TerminalError != "" {
+		t.Errorf("expected TerminalError cleared on generation drift, got %q", cr.Status.Polling.TerminalError)
+	}
+	if cr.Status.Polling.StartedAt != nil {
+		t.Errorf("expected StartedAt reset to nil for a fresh timeout budget, got %v", cr.Status.Polling.StartedAt)
 	}
 }

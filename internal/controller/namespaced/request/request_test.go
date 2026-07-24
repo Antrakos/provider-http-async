@@ -1039,18 +1039,22 @@ func namespacedRequestWithMutualTLS() *v1alpha2.AsyncRequest {
 }
 
 // TestDeleteAsyncChain verifies the finalizer-hold contract for async deletes:
-// When operationRef is set and DeletionTimestamp is present:
-//  1. Observe returns ResourceExists=true, ResourceUpToDate=false (LRO still in flight)
-//  2. Delete returns nil (budget expired, operationRef retained, finalizer not removed)
+// When a polling.response anchor is set (and externalRef is set, as it is after a CREATE
+// completes) and DeletionTimestamp is present:
+//  1. Observe returns ResourceExists=true, ResourceUpToDate=false (REMOVE LRO still in flight)
+//  2. Delete returns nil (budget expired, anchor retained, finalizer not removed)
 func TestDeleteAsyncChain(t *testing.T) {
 	const operationURL = "https://api.example.com/operations/op-123"
 
-	// Build a request with DeletionTimestamp and pre-set operationRef.
+	// Build a request with DeletionTimestamp and a pre-set in-flight anchor (the raw
+	// mutate response from the delete that started the LRO).
 	now := metav1.Now()
 	cr := namespacedRequest(
 		func(cr *v1alpha2.AsyncRequest) {
 			cr.DeletionTimestamp = &now
-			cr.Status.Polling.OperationRef = operationURL
+			cr.SetPollingResponse(map[string]interface{}{
+				"body": map[string]interface{}{"name": "operations/op-123"},
+			})
 			cr.Status.ExternalRef = "models/my-model"
 			cr.Finalizers = []string{"finalizer.managedresource.crossplane.io"}
 			// Add a REMOVE mapping so DeployAction can find it.
@@ -1078,10 +1082,10 @@ func TestDeleteAsyncChain(t *testing.T) {
 	e := &external{
 		logger:    logging.NewNopLogger(),
 		localKube: localKube,
-		http:      nil, // not called: operationRef path skips the mutate HTTP call
+		http:      nil, // not called: in-flight anchor path skips the mutate HTTP call
 	}
 
-	t.Run("ObserveWithOperationRefReturnsNotUpToDate", func(t *testing.T) {
+	t.Run("ObserveWithAnchorReturnsNotUpToDate", func(t *testing.T) {
 		got, err := e.Observe(context.Background(), cr)
 		if err != nil {
 			t.Fatalf("Observe(): unexpected error: %v", err)
@@ -1120,9 +1124,99 @@ func (m *mockPollerNotDone) Poll(
 	_ *service.RequestCRContext,
 	_ interfaces.HTTPMapping,
 	_ map[string]interface{},
-	_ string,
 ) (polling.Result, error) {
 	return polling.Result{Done: false, OperationURL: m.operationURL}, nil
+}
+
+// TestOrphanRecovery_RoutesResumeThroughCreate proves the PRD's headline goal works
+// through the real controller routing for a resource with NO UPDATE mapping (the Vertex
+// AI deployedModel shape): a terminal failure on a bad polling.url is recovered by a
+// spec fix, and the resume is routed via Observe → Create() → the CREATE mapping (not
+// Update(), which has no mapping to bind). POST fires exactly once across the cycle.
+func TestOrphanRecovery_RoutesResumeThroughCreate(t *testing.T) {
+	postCalls := 0
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			if method == "POST" {
+				postCalls++
+				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+					StatusCode: 202, Body: `{"name": "projects/x/operations/789"}`,
+				}}, nil
+			}
+			return httpClient.HttpDetails{}, nil // OBSERVE not reached while anchor in flight
+		},
+	}
+	localKube := &test.MockClient{
+		MockGet:          test.NewMockGetFn(nil),
+		MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+	}
+
+	// CREATE + OBSERVE only — no UPDATE mapping, like deployedModel.
+	cr := namespacedRequest(func(cr *v1alpha2.AsyncRequest) {
+		cr.Generation = 1
+		cr.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+			{Method: "POST", Action: "CREATE", URL: ".payload.baseUrl", Body: ".payload.body",
+				Polling: &common.Polling{URL: `.response.body.name`, Done: ".poll.response.body.done == true"}},
+			{Method: "GET", Action: "OBSERVE", URL: ".payload.baseUrl + \"/\" + .status.externalRef"},
+		}
+	})
+
+	e := &external{logger: logging.NewNopLogger(), localKube: localKube, http: httpMock}
+
+	// Step 1: CREATE fires (POST), anchor persisted, bad polling.url → terminal failure.
+	// Drive it through the service layer (Create dispatches to DeployAction).
+	svcCtx := service.NewServiceContext(context.Background(), localKube, logging.NewNopLogger(), httpMock, nil)
+	if err := request.DeployAction(svcCtx, service.NewRequestCRContext(cr), v1alpha2.ActionCreate); err != nil {
+		t.Fatalf("step 1 DeployAction: %v", err)
+	}
+	if postCalls != 1 {
+		t.Fatalf("step 1: expected 1 POST, got %d", postCalls)
+	}
+	if cr.Status.Polling.Response == nil || cr.Status.Polling.TerminalError == "" {
+		t.Fatal("step 1: expected anchor retained + terminalError set after bad polling.url")
+	}
+
+	// Step 2: operator fixes polling.url and bumps the generation. Observe must clear the
+	// terminal state and, because externalRef is still unset, return ResourceExists=false so
+	// the controller calls Create() — the only mapping that exists — to resume the poll.
+	cr.Generation = 2
+	cr.Spec.ForProvider.Mappings[0].Polling.URL = `"http://api/" + .response.body.name`
+
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("step 2 Observe: %v", err)
+	}
+	if obs.ResourceExists {
+		t.Error("step 2: expected ResourceExists=false so the controller routes to Create() (no UPDATE mapping)")
+	}
+	if cr.Status.Polling.TerminalError != "" {
+		t.Errorf("step 2: expected terminalError cleared on generation drift, got %q", cr.Status.Polling.TerminalError)
+	}
+
+	// Step 3: Create() resumes the poll via the retained anchor; a completing mock poller
+	// drives it to done. POST must NOT fire again.
+	completingPoller := &mockPollerCompleting{}
+	if err := request.DeployAction(service.NewServiceContext(context.Background(), localKube, logging.NewNopLogger(), httpMock, nil), service.NewRequestCRContext(cr), v1alpha2.ActionCreate, completingPoller); err != nil {
+		t.Fatalf("step 3 DeployAction: %v", err)
+	}
+	if postCalls != 1 {
+		t.Errorf("step 3: expected POST still 1 (resume via anchor, no duplicate), got %d", postCalls)
+	}
+	if cr.Status.Polling.Response != nil {
+		t.Error("step 3: expected anchor cleared on completion")
+	}
+}
+
+// mockPollerCompleting reports the operation done immediately (for resume tests).
+type mockPollerCompleting struct{}
+
+func (m *mockPollerCompleting) Poll(
+	_ *service.ServiceContext,
+	_ *service.RequestCRContext,
+	_ interfaces.HTTPMapping,
+	_ map[string]interface{},
+) (polling.Result, error) {
+	return polling.Result{Done: true, PollResponse: map[string]interface{}{"body": map[string]interface{}{"id": "model-789"}}}, nil
 }
 
 func TestObserve_DeletionMonitoring(t *testing.T) {

@@ -209,9 +209,11 @@ func (r *AsyncRequest) GetExternalRefValue() string {
 	return r.Status.ExternalRef
 }
 
-// GetOperationRef returns the in-flight operation URL from status.polling.operationRef.
-func (r *AsyncRequest) GetOperationRef() string {
-	return r.Status.Polling.OperationRef
+// GetPollingResponse returns the raw mutate response anchoring an in-flight
+// long-running operation, deserialized from status.polling.response, or nil when
+// no operation is in flight.
+func (r *AsyncRequest) GetPollingResponse() map[string]interface{} {
+	return common.RawExtensionToMap(r.Status.Polling.Response)
 }
 
 // GetTerminalError returns the persisted terminal poll-failure message.

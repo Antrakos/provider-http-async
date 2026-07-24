@@ -462,7 +462,8 @@ func Test_generateRequestObject(t *testing.T) {
 func Test_generateRequestObjectWithStatus(t *testing.T) {
 	cr := &v1alpha2.AsyncRequest{}
 	cr.Status.ExternalRef = "789"
-	cr.Status.Polling.OperationRef = "projects/.../operations/123"
+	// The in-flight operation anchor is now the raw mutate response; it is not surfaced
+	// into .status in the jq context (only externalRef is), so no operationRef is set.
 	cr.Status.Response = v1alpha2.Response{StatusCode: 200, Body: `{"id":"123"}`}
 
 	forProvider := v1alpha2.AsyncRequestParameters{
@@ -479,8 +480,10 @@ func Test_generateRequestObjectWithStatus(t *testing.T) {
 		if got := status["externalRef"]; got != "789" {
 			t.Errorf("expected externalRef=789, got %v", got)
 		}
-		if got := status["operationRef"]; got != "projects/.../operations/123" {
-			t.Errorf("expected operationRef set, got %v", got)
+		// The PRD removed operationRef from the .status jq context; only externalRef
+		// is exposed now.
+		if _, hasOpRef := status["operationRef"]; hasOpRef {
+			t.Errorf("expected no operationRef in .status jq context, got %v", status["operationRef"])
 		}
 		if _, hasPoll := ctx["poll"]; hasPoll {
 			t.Error("expected no .poll key when pollResponse is nil")

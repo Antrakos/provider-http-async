@@ -623,12 +623,17 @@ spec:
                 description: Polling holds state for the in-flight long-running operation
                   poll loop.
                 properties:
-                  operationRef:
+                  response:
                     description: |-
-                      OperationRef is the in-flight mutate operation URL. It is the crash-recovery
-                      anchor: a reconcile that finds it non-empty resumes polling instead of
-                      re-firing the mutate call.
-                    type: string
+                      Response is the raw response from the mutate call (CREATE/UPDATE/DELETE) whose
+                      long-running operation is being polled. It is the crash-recovery anchor: while
+                      non-null, a reconcile resumes polling (recomputing polling.url against this
+                      response) instead of re-firing the mutate call. Set when the mutate call succeeds
+                      and cleared only when the operation completes (or the resource is deleted). It is
+                      deliberately retained across a terminal poll failure so a corrected polling.url
+                      resumes the existing operation rather than creating a duplicate.
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
                   startedAt:
                     description: |-
                       StartedAt is the time polling began. Combined with polling.timeout it gives

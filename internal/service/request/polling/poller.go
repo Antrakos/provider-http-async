@@ -17,9 +17,10 @@ limitations under the License.
 // Package polling implements the long-running-operation poll loop for AsyncRequest.
 // The design is foreground-budget-bounded: each reconcile drives the loop up to a
 // per-reconcile budget (defaultReconcileBudget) and returns if not yet done, letting
-// Crossplane requeue. status.operationRef is the crash-recovery anchor — a reconcile
-// that finds it non-empty re-attaches to the same operation URL instead of re-firing
-// the mutate call. See PRD section "On 'a long poll blocks the reconciler'".
+// Crossplane requeue. status.polling.response is the crash-recovery anchor — the raw
+// mutate response, persisted before the first poll. A reconcile that finds it set
+// resumes polling (recomputing polling.url against it) instead of re-firing the mutate
+// call. See docs/prd-polling-response-anchor.md.
 package polling
 
 import (
@@ -28,7 +29,6 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	"golang.org/x/exp/maps"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -43,7 +43,7 @@ import (
 
 // defaultReconcileBudget caps how long a single reconcile iteration will spend
 // in the foreground poll loop. Once elapsed the loop returns Done=false and
-// Crossplane requeues; the next reconcile resumes via operationRef.
+// Crossplane requeues; the next reconcile resumes via the persisted polling.response.
 const defaultReconcileBudget = 2 * time.Minute
 
 // Result reports the outcome of a Poll call.
@@ -54,23 +54,25 @@ type Result struct {
 	OperationURL string
 	// PollResponse is the last .poll.response received (only set when Done=true).
 	PollResponse map[string]interface{}
-	// TerminalErr is non-empty when polling.error evaluated to a non-null value;
-	// this is a terminal condition, not a Go error.
+	// TerminalErr is non-empty when polling.error evaluated to a non-null value, the
+	// resolved polling.url is unusable, or the overall polling.timeout elapsed; this is
+	// a terminal condition, not a Go error. The anchor (polling.response) is retained so
+	// a corrected spec resumes the existing operation instead of re-creating it.
 	TerminalErr string
 }
 
 // Poller runs the poll loop for a long-running operation.
 type Poller interface {
-	// Poll resolves polling.url, persists operationRef, and drives the operation to
-	// completion (or until the per-reconcile budget or timeout is reached).
-	// resumeURL is a non-empty status.operationRef to re-attach to instead of
-	// re-evaluating polling.url (crash / requeue recovery).
+	// Poll recomputes polling.url from mutateResponse, validates it, and drives the
+	// operation to completion (or until the per-reconcile budget or timeout is reached).
+	// The anchor (status.polling.response) is persisted by the caller before Poll runs,
+	// so a crash mid-poll resumes against the same operation instead of re-firing the
+	// mutate call; Poll itself is stateless across reconciles.
 	Poll(
 		svcCtx *service.ServiceContext,
 		crCtx *service.RequestCRContext,
 		mapping interfaces.HTTPMapping,
 		mutateResponse map[string]interface{},
-		resumeURL string,
 	) (Result, error)
 }
 
@@ -85,58 +87,68 @@ func (fp *foregroundPoller) Poll(
 	crCtx *service.RequestCRContext,
 	mapping interfaces.HTTPMapping,
 	mutateResponse map[string]interface{},
-	resumeURL string,
 ) (Result, error) {
 	polling := mapping.GetPolling()
 	if polling == nil {
+		// No polling block: the caller should not have persisted an anchor for this
+		// mapping. Treat the operation as already complete so the caller extracts the
+		// externalRef from the mutate response and clears the anchor (if any).
 		return Result{Done: true}, nil
 	}
 
 	spec := crCtx.Spec()
 	statusReader := crCtx.Status()
 
-	// Resolve the operation URL.
-	operationURL := resumeURL
-	if operationURL == "" {
-		ctx := requestgen.GenerateRequestContextFromMap(spec, statusReader, mutateResponse, nil)
-		var err error
-		operationURL, err = jq.ParseString(polling.GetURL(), ctx)
-		if err != nil {
-			return Result{}, errors.Wrap(err, "failed to evaluate polling.url")
-		}
-		if operationURL == "" {
-			return Result{}, errors.Errorf("polling.url %q resolved to an empty operation URL", polling.GetURL())
-		}
-		// The mutate call already succeeded (a resource was provisioned) by the time we
-		// get here, so a malformed polling.url is a terminal *config* error, not a
-		// transient one: retrying re-fires the poll GET forever against an unpollable
-		// URL and never recovers. Many GCP LRO APIs return `name` as a bare resource
-		// path (e.g. "projects/.../operations/789") — writing `polling.url:
-		// .response.body.name` yields a scheme-less string that http.Get rejects with
-		// "unsupported protocol scheme". Surface this as a terminal failure with an
-		// actionable message so the operator fixes the expression (prepending the base
-		// URL) instead of the provider silently retrying. Recoverable on spec change.
-		if reason := validateOperationURL(operationURL); reason != "" {
-			return Result{TerminalErr: fmt.Sprintf(
-				"polling.url %q resolved to %q, which is not a valid absolute URL: %s. "+
-					"Many GCP LRO APIs return a bare resource path in .response.body.name; "+
-					"prepend the base URL, e.g. '\"https://<host>/<version>/\" + .response.body.name'.",
-				polling.GetURL(), operationURL, reason,
-			)}, nil
-		}
+	// Recompute the operation URL from the mutate response on every reconcile. jq is
+	// pure, so the same persisted response yields the same URL within a loop — but a
+	// corrected polling.url now takes effect on the next reconcile instead of being
+	// frozen on first entry.
+	ctx := requestgen.GenerateRequestContextFromMap(spec, statusReader, mutateResponse, nil)
+	operationURL, err := jq.ParseString(polling.GetURL(), ctx)
+	if err != nil {
+		return Result{}, errors.Wrap(err, "failed to evaluate polling.url")
 	}
-
-	// PRD step a': persist operationRef BEFORE the first GET so a crash mid-poll
-	// resumes against the same operation instead of re-firing the mutate call.
-	if err := persistOperationRef(svcCtx, crCtx, operationURL); err != nil {
-		return Result{}, err
+	if operationURL == "" {
+		// The mutate call already succeeded and the anchor is persisted, so an empty
+		// polling.url is a terminal *config* error — not a transient one. The usual cause
+		// is a `polling` block attached to an operation that completes synchronously (its
+		// response carries no long-running-operation identifier). Retaining the anchor
+		// means removing the `polling` block (a spec change) clears the terminal state and
+		// reconciles synchronously instead of re-firing the mutate call.
+		return Result{TerminalErr: fmt.Sprintf(
+			"polling.url %q resolved to an empty value. This mapping's operation appears "+
+				"to be synchronous (no long-running-operation identifier in the response). "+
+				"Remove the `polling` block from this mapping if the operation completes "+
+				"synchronously.",
+			polling.GetURL(),
+		)}, nil
+	}
+	// The mutate call already succeeded (a resource was provisioned) by the time we get
+	// here, so a malformed polling.url is a terminal *config* error, not a transient one:
+	// retrying re-fires the poll GET forever against an unpollable URL and never recovers.
+	// Many GCP LRO APIs return `name` as a bare resource path (e.g.
+	// "projects/.../operations/789") — writing `polling.url: .response.body.name` yields a
+	// scheme-less string that http.Get rejects with "unsupported protocol scheme". Surface
+	// this as a terminal failure with an actionable message so the operator fixes the
+	// expression (prepending the base URL) instead of the provider silently retrying. The
+	// anchor is retained so the fix resumes the existing operation. Recoverable on spec
+	// change.
+	if reason := validateOperationURL(operationURL); reason != "" {
+		return Result{TerminalErr: fmt.Sprintf(
+			"polling.url %q resolved to %q, which is not a valid absolute URL: %s. "+
+				"Many GCP LRO APIs return a bare resource path in .response.body.name; "+
+				"prepend the base URL, e.g. '\"https://<host>/<version>/\" + .response.body.name'.",
+			polling.GetURL(), operationURL, reason,
+		)}, nil
 	}
 
 	timeout := polling.GetTimeout()
 	interval := polling.GetInterval()
 	startedAt := crCtx.Status().GetOperationStartedAt()
 	if startedAt == nil {
-		// persistOperationRef will set this; use now as a safe local fallback.
+		// StartedAt is nil on a fresh entry (the caller sets it with the anchor) or after a
+		// terminal-clear reset it to give the resumed operation a fresh timeout budget. Use
+		// now so the deadline is still bounded.
 		now := metav1.Now()
 		startedAt = &now
 	}
@@ -144,9 +156,14 @@ func (fp *foregroundPoller) Poll(
 	budgetEnd := time.Now().Add(defaultReconcileBudget)
 
 	for {
-		// Timeout check.
+		// Overall timeout: a terminal failure (not a requeuing error) so a
+		// never-completing operation becomes visible and stalled rather than hot-looping
+		// requeues. The anchor is retained, so raising polling.timeout (a spec change)
+		// clears the terminal state, resets the deadline, and resumes.
 		if time.Now().After(deadline) {
-			return Result{OperationURL: operationURL}, errors.New(fmt.Sprintf("polling timeout after %s for operation %s", timeout, operationURL))
+			return Result{OperationURL: operationURL, TerminalErr: fmt.Sprintf(
+				"polling timeout after %s for operation %s", timeout, operationURL,
+			)}, nil
 		}
 
 		// Per-reconcile budget: return without error so Crossplane requeues.
@@ -162,6 +179,8 @@ func (fp *foregroundPoller) Poll(
 			svcCtx.TLSConfigData,
 		)
 		if err != nil {
+			// Transport error: transient — return a Go error so the controller requeues
+			// with backoff. The anchor is retained; the next reconcile resumes.
 			return Result{}, errors.Wrap(err, "polling GET failed")
 		}
 
@@ -227,41 +246,6 @@ func validateOperationURL(raw string) string {
 	return ""
 }
 
-// persistOperationRef writes operationRef (and, on first entry, operationStartedAt) to
-// status and flushes to the API server. RetryOnConflict handles optimistic-lock conflicts.
-func persistOperationRef(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext, url string) error {
-	resource := crCtx.GetCR()
-	nn := types.NamespacedName{Name: resource.GetName(), Namespace: resource.GetNamespace()}
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		if err := svcCtx.LocalKube.Get(svcCtx.Ctx, nn, resource); err != nil {
-			return errors.Wrap(err, "failed to get resource before setting operationRef")
-		}
-		sw := crCtx.StatusWriter()
-		sw.SetOperationRef(url)
-		if crCtx.Status().GetOperationStartedAt() == nil {
-			now := metav1.Now()
-			sw.SetOperationStartedAt(&now)
-		}
-		return svcCtx.LocalKube.Status().Update(svcCtx.Ctx, resource)
-	})
-}
-
-// ClearOperationRef clears operationRef and operationStartedAt in status and flushes to
-// the API server. RetryOnConflict handles optimistic-lock conflicts from concurrent reconciles.
-func ClearOperationRef(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext) error {
-	resource := crCtx.GetCR()
-	nn := types.NamespacedName{Name: resource.GetName(), Namespace: resource.GetNamespace()}
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		if err := svcCtx.LocalKube.Get(svcCtx.Ctx, nn, resource); err != nil {
-			return errors.Wrap(err, "failed to get resource before clearing operationRef")
-		}
-		sw := crCtx.StatusWriter()
-		sw.SetOperationRef("")
-		sw.SetOperationStartedAt(nil)
-		return svcCtx.LocalKube.Status().Update(svcCtx.Ctx, resource)
-	})
-}
-
 // buildPollJQCtx assembles the full jq context for polling.done / polling.error evaluation.
 // .response is the stable mutate response (carried as a raw map across iterations) and
 // .poll.response is the current poll GET response. GenerateRequestContextFromMap injects
@@ -282,21 +266,14 @@ func ResponseToMap(resp *httpClient.HttpResponse) map[string]interface{} {
 	return m
 }
 
-// MergeStatus injects the status subtree (externalRef, operationRef) into an existing jq context.
-func MergeStatus(ctx map[string]interface{}, status interfaces.RequestStatusReader) {
-	statusMap := map[string]interface{}{
-		"externalRef":  status.GetExternalRefValue(),
-		"operationRef": status.GetOperationRef(),
-	}
-	maps.Copy(ctx, map[string]interface{}{"status": statusMap})
-}
-
 // SetTerminalFailure marks the resource as terminally failed due to a poll or config error.
-// It persists the message, clears operationRef so subsequent reconciles do not resume the
-// (already-failed) poll loop, and records the current generation so a later spec change
-// clears the terminal state and retries. It deliberately does not increment the failure
-// counter: a terminal failure is a stable state, not a transient retry.
-// RetryOnConflict handles optimistic-lock conflicts from concurrent reconciles.
+// It persists the message and records the current generation so a later spec change clears
+// the terminal state and retries. It deliberately PRESERVES status.polling.response (and
+// StartedAt): the operation is already in flight, and a corrected polling.url must resume it
+// rather than re-create it — clearing the anchor here would reintroduce the duplicate. Only
+// clearTerminalError (on generation drift) and the completion path touch the anchor. It
+// deliberately does not increment the failure counter: a terminal failure is a stable state,
+// not a transient retry. RetryOnConflict handles optimistic-lock conflicts.
 func SetTerminalFailure(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext, terminalErr string) error {
 	resource := crCtx.GetCR()
 	nn := types.NamespacedName{Name: resource.GetName(), Namespace: resource.GetNamespace()}
@@ -305,8 +282,6 @@ func SetTerminalFailure(svcCtx *service.ServiceContext, crCtx *service.RequestCR
 			return errors.Wrap(err, "failed to get resource before setting terminal failure")
 		}
 		sw := crCtx.StatusWriter()
-		sw.SetOperationRef("")
-		sw.SetOperationStartedAt(nil)
 		sw.SetTerminalError(terminalErr)
 		sw.SetObservedGeneration(crCtx.Status().GetGeneration())
 		return svcCtx.LocalKube.Status().Update(svcCtx.Ctx, resource)

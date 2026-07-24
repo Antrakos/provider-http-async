@@ -3,6 +3,7 @@ package request
 import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	"github.com/pkg/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 
@@ -31,14 +32,16 @@ func DeployAction(svcCtx *service.ServiceContext, crCtx *service.RequestCRContex
 		return nil
 	}
 
-	// Crash/requeue recovery: if operationRef is already set for this resource, the
-	// mutate call was already fired before a crash or budget expiry. Skip re-firing
-	// and go straight to resuming the poll loop.
-	resumeURL := crCtx.Status().GetOperationRef()
+	// Crash/requeue recovery: if a mutate response is already persisted, the mutate call
+	// was already fired before a crash, budget expiry, or terminal failure. Skip re-firing
+	// and resume the poll loop, recomputing polling.url against the persisted response.
+	// This is the orphan-hazard fix: a bad (later-corrected) polling.url resumes the existing
+	// operation instead of re-firing CREATE and minting a duplicate remote resource.
+	inFlight := crCtx.Status().GetPollingResponse()
 
 	var mutateResponseMap map[string]interface{}
 
-	if resumeURL == "" {
+	if inFlight == nil {
 		// Normal path: fire the mutate HTTP call.
 		requestDetails, genErr := requestgen.GenerateValidRequestDetails(svcCtx, crCtx, mapping)
 		if genErr != nil {
@@ -88,27 +91,54 @@ func DeployAction(svcCtx *service.ServiceContext, crCtx *service.RequestCRContex
 		}
 
 		mutateResponseMap = polling.ResponseToMap(&details.HttpResponse)
+		// ANCHOR: persist the mutate response BEFORE the first poll so a crash mid-poll
+		// (or a terminal polling.url failure) resumes the in-flight operation instead of
+		// re-firing the mutate call. This is the crux of the orphan-hazard fix: even on a
+		// bad polling.url the anchor survives, so correcting the expression resumes polling
+		// rather than creating a duplicate.
+		if persistErr := persistPollingResponse(svcCtx, crCtx, mutateResponseMap); persistErr != nil {
+			return persistErr
+		}
+	} else {
+		// Resume: the persisted response is the source of truth for .response across every
+		// resume (crash, per-reconcile budget expiry, fixed spec), so polling.done /
+		// polling.error / externalRef expressions referencing .response stay correct.
+		mutateResponseMap = inFlight
+		// A terminal-clear reset StartedAt to nil to give the resumed operation a fresh
+		// polling.timeout budget. Persist it now (once) so the poller's deadline is anchored
+		// to a stable instant and the timeout actually elapses across requeues. Without this
+		// the poller's local now-fallback fires on every reconcile, re-anchoring the deadline
+		// and unbounding polling.timeout. No-op when StartedAt is already set (normal resume).
+		if crCtx.Status().GetOperationStartedAt() == nil {
+			if err := persistOperationStartedAtNow(svcCtx, crCtx); err != nil {
+				return err
+			}
+		}
 	}
 
-	// Run the poll loop (foreground, budget-bounded).
-	result, pollErr := p.Poll(svcCtx, crCtx, mapping, mutateResponseMap, resumeURL)
+	// Run the poll loop (foreground, budget-bounded). It recomputes polling.url from
+	// mutateResponseMap each call — no frozen resumeURL.
+	result, pollErr := p.Poll(svcCtx, crCtx, mapping, mutateResponseMap)
 	if pollErr != nil {
-		// Transport error or timeout: return error so the controller requeues with backoff.
+		// Transport error: return error so the controller requeues with backoff.
 		return pollErr
 	}
 
 	if result.TerminalErr != "" {
-		// Terminal poll failure: set Ready=False, Synced=False; do not requeue until spec changes.
+		// Terminal poll failure (polling.error non-null, bad/empty polling.url, or
+		// timeout): set Ready=False, Synced=False and record the generation; the anchor is
+		// PRESERVED so a spec change resumes the existing operation rather than re-creating.
 		return polling.SetTerminalFailure(svcCtx, crCtx, result.TerminalErr)
 	}
 
 	if !result.Done {
-		// Budget exhausted but operation still running: operationRef is retained.
+		// Budget exhausted but operation still running: the anchor is retained.
 		// Return nil so the controller requeues without error backoff.
 		return nil
 	}
 
-	// Poll completed successfully. Extract externalRef and atomically clear operationRef.
+	// Poll completed successfully. Extract externalRef and atomically clear the anchor so
+	// future reconciles OBSERVE instead of resuming.
 	return extractAndPersistExternalRef(svcCtx, crCtx, mutateResponseMap, result.PollResponse)
 }
 
@@ -122,7 +152,7 @@ func extractExternalRefFromResponse(svcCtx *service.ServiceContext, crCtx *servi
 }
 
 // extractAndPersistExternalRef evaluates spec.externalRef against the combined jq context
-// and writes the result along with a cleared operationRef in one status flush.
+// and writes the result along with a cleared polling.response anchor in one status flush.
 // RetryOnConflict handles optimistic-lock conflicts from concurrent reconciles.
 func extractAndPersistExternalRef(
 	svcCtx *service.ServiceContext,
@@ -138,7 +168,8 @@ func extractAndPersistExternalRef(
 		}
 
 		sw := crCtx.StatusWriter()
-		sw.SetOperationRef("")
+		// Operation complete: drop the anchor so subsequent reconciles OBSERVE, not resume.
+		sw.SetPollingResponse(nil)
 		sw.SetOperationStartedAt(nil)
 
 		if exprJQ := crCtx.Spec().GetExternalRef(); exprJQ != "" {
@@ -185,15 +216,14 @@ func extractExternalRefInto(svcCtx *service.ServiceContext, crCtx *service.Reque
 func buildExternalRefJQCtx(
 	status interface {
 		GetExternalRefValue() string
-		GetOperationRef() string
+		GetPollingResponse() map[string]interface{}
 	},
 	mutateResponse map[string]interface{},
 	pollResponse map[string]interface{},
 ) map[string]interface{} {
 	ctx := map[string]interface{}{
 		"status": map[string]interface{}{
-			"externalRef":  status.GetExternalRefValue(),
-			"operationRef": status.GetOperationRef(),
+			"externalRef": status.GetExternalRefValue(),
 		},
 		"response": mutateResponse,
 	}
@@ -204,4 +234,44 @@ func buildExternalRefJQCtx(
 	}
 	json_util.ConvertJSONStringsToMaps(&ctx)
 	return ctx
+}
+
+// persistPollingResponse writes status.polling.response (and, on first entry,
+// StartedAt) to status and flushes to the API server. The anchor is set before the first
+// poll so a crash or terminal failure mid-loop resumes the existing operation rather than
+// re-firing the mutate call. RetryOnConflict handles optimistic-lock conflicts.
+func persistPollingResponse(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext, mutateResponse map[string]interface{}) error {
+	resource := crCtx.GetCR()
+	nn := types.NamespacedName{Name: resource.GetName(), Namespace: resource.GetNamespace()}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := svcCtx.LocalKube.Get(svcCtx.Ctx, nn, resource); err != nil {
+			return errors.Wrap(err, "failed to get resource before setting polling response")
+		}
+		sw := crCtx.StatusWriter()
+		sw.SetPollingResponse(mutateResponse)
+		if crCtx.Status().GetOperationStartedAt() == nil {
+			now := metav1.Now()
+			sw.SetOperationStartedAt(&now)
+		}
+		return svcCtx.LocalKube.Status().Update(svcCtx.Ctx, resource)
+	})
+}
+
+// persistOperationStartedAtNow sets StartedAt to now and flushes it to the API server.
+// Used on resume after a terminal-clear reset StartedAt to nil (to give the resumed
+// operation a fresh polling.timeout budget): it anchors the poller's deadline to a stable
+// persisted instant so the timeout actually elapses across requeues. Without this the
+// poller's local now-fallback would re-anchor the deadline on every reconcile and
+// polling.timeout would never elapse. RetryOnConflict handles optimistic-lock conflicts.
+func persistOperationStartedAtNow(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext) error {
+	resource := crCtx.GetCR()
+	nn := types.NamespacedName{Name: resource.GetName(), Namespace: resource.GetNamespace()}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := svcCtx.LocalKube.Get(svcCtx.Ctx, nn, resource); err != nil {
+			return errors.Wrap(err, "failed to get resource before setting operation startedAt")
+		}
+		now := metav1.Now()
+		crCtx.StatusWriter().SetOperationStartedAt(&now)
+		return svcCtx.LocalKube.Status().Update(svcCtx.Ctx, resource)
+	})
 }

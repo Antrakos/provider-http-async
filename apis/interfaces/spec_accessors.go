@@ -276,8 +276,11 @@ type RequestStatusReader interface {
 	// GetExternalRefValue returns the resolved status.externalRef.
 	GetExternalRefValue() string
 
-	// GetOperationRef returns the in-flight operation URL from status.operationRef.
-	GetOperationRef() string
+	// GetPollingResponse returns the raw mutate response anchoring an in-flight
+	// long-running operation (deserialized from status.polling.response), or nil
+	// when no operation is in flight. While non-nil a reconcile resumes polling
+	// instead of re-firing the mutate call.
+	GetPollingResponse() map[string]interface{}
 
 	// GetTerminalError returns the persisted terminal poll-failure message, or "" if
 	// the resource is not in a terminal failure state.
@@ -307,8 +310,9 @@ type RequestStatusWriter interface {
 	// SetExternalRef writes the resolved external identifier to status.
 	SetExternalRef(ref string)
 
-	// SetOperationRef writes (or clears) the in-flight operation URL in status.
-	SetOperationRef(ref string)
+	// SetPollingResponse persists (or clears, when passed nil) the raw mutate response
+	// that anchors an in-flight long-running operation in status.polling.response.
+	SetPollingResponse(m map[string]interface{})
 
 	// SetTerminalError persists (or clears, when passed "") the terminal poll-failure
 	// message. It does not increment the failure counter — a terminal failure is a

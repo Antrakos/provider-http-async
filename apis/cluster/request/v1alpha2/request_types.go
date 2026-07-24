@@ -20,6 +20,7 @@ import (
 	"reflect"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
@@ -174,13 +175,18 @@ type AsyncRequestStatus struct {
 }
 
 // PollingStatus groups the fields that track an in-flight long-running operation.
-// All three fields are set together when polling begins and cleared together when it ends.
+// Response is set when the mutate call succeeds and cleared only when the operation
+// completes; StartedAt and TerminalError track its lifetime.
 type PollingStatus struct {
-	// OperationRef is the in-flight mutate operation URL. It is the crash-recovery
-	// anchor: a reconcile that finds it non-empty resumes polling instead of
-	// re-firing the mutate call.
+	// Response is the raw response from the mutate call (CREATE/UPDATE/DELETE) whose
+	// long-running operation is being polled. It is the crash-recovery anchor: while
+	// non-null, a reconcile resumes polling (recomputing polling.url against this
+	// response) instead of re-firing the mutate call. Set when the mutate call succeeds
+	// and cleared only when the operation completes (or the resource is deleted). It is
+	// deliberately retained across a terminal poll failure so a corrected polling.url
+	// resumes the existing operation rather than creating a duplicate.
 	// +optional
-	OperationRef string `json:"operationRef,omitempty"`
+	Response *runtime.RawExtension `json:"response,omitempty"`
 
 	// StartedAt is the time polling began. Combined with polling.timeout it gives
 	// the absolute deadline across all reconciles, preventing the timeout from

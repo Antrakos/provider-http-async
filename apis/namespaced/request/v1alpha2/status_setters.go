@@ -1,9 +1,11 @@
 package v1alpha2
 
 import (
+	"encoding/json"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 func (d *AsyncRequest) SetStatusCode(statusCode int) {
@@ -48,8 +50,24 @@ func (d *AsyncRequest) SetExternalRef(ref string) {
 	d.Status.ExternalRef = ref
 }
 
-func (d *AsyncRequest) SetOperationRef(ref string) {
-	d.Status.Polling.OperationRef = ref
+// SetPollingResponse persists (or clears, when m is nil) the raw mutate response that
+// anchors an in-flight long-running operation. The map is serialized to a
+// runtime.RawExtension so the poll jq context can be rebuilt on resume by deserializing
+// it back to a map via GetPollingResponse.
+func (d *AsyncRequest) SetPollingResponse(m map[string]interface{}) {
+	if m == nil {
+		d.Status.Polling.Response = nil
+		return
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		// A marshal failure of an in-memory map is a programming error; leave the
+		// anchor unset rather than persisting a corrupt blob so the next reconcile
+		// re-fires the mutate call instead of polling a garbage URL.
+		d.Status.Polling.Response = nil
+		return
+	}
+	d.Status.Polling.Response = &runtime.RawExtension{Raw: raw}
 }
 
 func (d *AsyncRequest) SetTerminalError(msg string) {

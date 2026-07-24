@@ -16,7 +16,12 @@ limitations under the License.
 
 package common
 
-import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+import (
+	"encoding/json"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+)
 
 // Polling declares how to poll a long-running operation to completion after a
 // mutating mapping (CREATE/UPDATE/DELETE) fires. When absent, the mapping behaves
@@ -43,4 +48,18 @@ type Polling struct {
 	// Interval is the delay between poll iterations. Defaults to 5s.
 	// +optional
 	Interval *metav1.Duration `json:"interval,omitempty"`
+}
+
+// RawExtensionToMap deserializes a runtime.RawExtension holding a JSON object into the
+// raw map used as .response in the poll jq context. It returns nil when ext is nil or
+// has no raw bytes, so callers can treat a nil result as "no in-flight operation".
+func RawExtensionToMap(ext *runtime.RawExtension) map[string]interface{} {
+	if ext == nil || len(ext.Raw) == 0 {
+		return nil
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(ext.Raw, &m); err != nil {
+		return nil
+	}
+	return m
 }
