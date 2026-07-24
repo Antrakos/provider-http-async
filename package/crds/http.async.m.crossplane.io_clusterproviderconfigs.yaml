@@ -49,7 +49,14 @@ spec:
             description: A ProviderConfigSpec defines the desired state of a ProviderConfig.
             properties:
               credentials:
-                description: Credentials required to authenticate to this provider.
+                description: |-
+                  Credentials required to authenticate to this provider.
+
+                  Optional since the credential-free identity paths (gcp, oidc) are
+                  themselves authentication mechanisms. At least one of credentials, gcp, or
+                  oidc must be set; see the connector validation. The enum stays the model
+                  for static credential material only and is deliberately not extended with
+                  GCP/OIDC — those are live identity-exchange mechanisms, not stored bytes.
                 properties:
                   env:
                     description: |-
@@ -104,11 +111,39 @@ spec:
                 required:
                 - source
                 type: object
+              gcp:
+                description: |-
+                  GCP configures native Google Cloud authentication for outgoing HTTP calls.
+                  When set, the provider uses Application Default Credentials (ADC) — on GKE
+                  Workload Identity this reads the metadata server and needs no projected
+                  volume. When serviceAccount is set the ADC source impersonates that GCP
+                  service account, letting different ProviderConfigs act as different GCP
+                  service accounts from one provider pod. Tokens are resolved at call time
+                  and cached in memory; no credentials are stored in etcd.
+                  Mutually exclusive with oidc.
+                properties:
+                  scopes:
+                    description: |-
+                      Scopes are the OAuth scopes requested for the resulting access token. When
+                      omitted the provider defaults to https://www.googleapis.com/auth/cloud-platform.
+                      Override with a narrower scope for least-privilege.
+                    items:
+                      type: string
+                    type: array
+                  serviceAccount:
+                    description: |-
+                      ServiceAccount is the fully-qualified GCP service-account email to impersonate.
+                      When omitted the provider uses Application Default Credentials directly
+                      (on GKE Workload Identity this is the pod's bound GSA, with no projected
+                      volume and no per-config ceremony beyond enabling gcp).
+                    type: string
+                type: object
               oidc:
                 description: |-
                   OIDC configures transparent workload-identity token exchange for outgoing
                   HTTP calls. When set, tokens are resolved at call time from the pod's
                   projected service account token; no credentials are stored in etcd.
+                  Mutually exclusive with gcp.
                 properties:
                   exchange:
                     description: Exchange configures the OIDC token exchange endpoint.
@@ -234,8 +269,6 @@ spec:
                       If true, any certificate presented by the server and any host name in that certificate is accepted.
                     type: boolean
                 type: object
-            required:
-            - credentials
             type: object
           status:
             description: A ProviderConfigStatus reflects the observed state of a ProviderConfig.

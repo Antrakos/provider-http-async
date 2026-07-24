@@ -34,7 +34,14 @@ var _ resource.ProviderConfig = &ProviderConfig{}
 // A ProviderConfigSpec defines the desired state of a ProviderConfig.
 type ProviderConfigSpec struct {
 	// Credentials required to authenticate to this provider.
-	Credentials ProviderCredentials `json:"credentials"`
+	//
+	// Optional since the credential-free identity paths (gcp, oidc) are
+	// themselves authentication mechanisms. At least one of credentials, gcp, or
+	// oidc must be set; see the connector validation. The enum stays the model
+	// for static credential material only and is deliberately not extended with
+	// GCP/OIDC — those are live identity-exchange mechanisms, not stored bytes.
+	// +optional
+	Credentials *ProviderCredentials `json:"credentials,omitempty"`
 
 	// TLS configuration for HTTPS requests.
 	// +optional
@@ -43,8 +50,20 @@ type ProviderConfigSpec struct {
 	// OIDC configures transparent workload-identity token exchange for outgoing
 	// HTTP calls. When set, tokens are resolved at call time from the pod's
 	// projected service account token; no credentials are stored in etcd.
+	// Mutually exclusive with gcp.
 	// +optional
 	OIDC *common.OIDCConfig `json:"oidc,omitempty"`
+
+	// GCP configures native Google Cloud authentication for outgoing HTTP calls.
+	// When set, the provider uses Application Default Credentials (ADC) — on GKE
+	// Workload Identity this reads the metadata server and needs no projected
+	// volume. When serviceAccount is set the ADC source impersonates that GCP
+	// service account, letting different ProviderConfigs act as different GCP
+	// service accounts from one provider pod. Tokens are resolved at call time
+	// and cached in memory; no credentials are stored in etcd.
+	// Mutually exclusive with oidc.
+	// +optional
+	GCP *common.GCPAuth `json:"gcp,omitempty"`
 }
 
 // ProviderCredentials required to authenticate.

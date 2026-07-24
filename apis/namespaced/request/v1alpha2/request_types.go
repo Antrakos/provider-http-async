@@ -90,6 +90,12 @@ type AsyncRequestParameters struct {
 	// OIDC overrides the ProviderConfig OIDC settings for this resource.
 	// +optional
 	OIDC *common.OIDCConfig `json:"oidc,omitempty"`
+
+	// GCP overrides the ProviderConfig GCP auth settings for this resource.
+	// Field-merge with the ProviderConfig defaults via MergeGCPConfigs: a
+	// non-empty override value wins, scopes replace.
+	// +optional
+	GCP *common.GCPAuth `json:"gcp,omitempty"`
 }
 
 type Mapping struct {

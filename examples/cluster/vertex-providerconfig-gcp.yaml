@@ -1,0 +1,12 @@
+apiVersion: http.async.crossplane.io/v1alpha1
+kind: ProviderConfig
+metadata:
+  name: vertex-ai-gcp-native
+spec:
+  # ADC + impersonation: no projected volume, no OIDC ceremony.
+  # On GKE Workload Identity the pod's bound GSA (hub) mints a token as team-a
+  # (spoke), granted via roles/iam.serviceAccountTokenCreator.
+  gcp:
+    serviceAccount: team-a@my-project.iam.gserviceaccount.com
+    scopes:
+      - https://www.googleapis.com/auth/cloud-platform

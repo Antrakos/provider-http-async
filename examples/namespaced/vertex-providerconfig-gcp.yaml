@@ -1,0 +1,10 @@
+apiVersion: http.async.m.crossplane.io/v1alpha2
+kind: ProviderConfig
+metadata:
+  name: vertex-ai-gcp-native
+  namespace: my-team
+spec:
+  # Minimal GCP native auth: ADC only (no serviceAccount).
+  # On GKE Workload Identity this reads the metadata server and returns
+  # the pod's bound GSA token — no projected volume needed.
+  gcp: {}

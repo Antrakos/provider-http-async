@@ -93,6 +93,28 @@ spec:
                       identifier. Evaluated against .poll.response first, falling back to
                       .response. The result is written to status.externalRef.
                     type: string
+                  gcp:
+                    description: |-
+                      GCP overrides the ProviderConfig GCP auth settings for this resource.
+                      Field-merge with the ProviderConfig defaults via MergeGCPConfigs: a
+                      non-empty override value wins, scopes replace.
+                    properties:
+                      scopes:
+                        description: |-
+                          Scopes are the OAuth scopes requested for the resulting access token. When
+                          omitted the provider defaults to https://www.googleapis.com/auth/cloud-platform.
+                          Override with a narrower scope for least-privilege.
+                        items:
+                          type: string
+                        type: array
+                      serviceAccount:
+                        description: |-
+                          ServiceAccount is the fully-qualified GCP service-account email to impersonate.
+                          When omitted the provider uses Application Default Credentials directly
+                          (on GKE Workload Identity this is the pod's bound GSA, with no projected
+                          volume and no per-config ceremony beyond enabling gcp).
+                        type: string
+                    type: object
                   headers:
                     additionalProperties:
                       items:

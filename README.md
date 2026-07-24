@@ -170,6 +170,66 @@ spec:
     refreshBefore: 5m
 ```
 
+### GCP native authentication
+
+Configure native Google Cloud auth on a `ProviderConfig`. No projected volume or
+OIDC ceremony required — the provider uses the GKE Workload Identity metadata server.
+
+#### IAM prerequisites (one-time admin setup)
+
+1. Bind the provider's KSA to a hub GSA via the standard Workload Identity annotation
+   and IAM allow-policy (see the GKE Workload Identity docs).
+2. For each spoke GSA named in a `ProviderConfig`, grant the hub
+   `roles/iam.serviceAccountTokenCreator`:
+
+   ```hcl
+   resource "google_service_account_iam_member" "impersonate_team_a" {
+     service_account_id = google_service_account.team_a.name
+     role               = "roles/iam.serviceAccountTokenCreator"
+     member             = "serviceAccount:hub@my-project.iam.gserviceaccount.com"
+   }
+   # repeat per target SA
+   ```
+
+#### Minimal form — ADC only (pod's bound GSA)
+
+```yaml
+apiVersion: http.async.m.crossplane.io/v1alpha2
+kind: ProviderConfig
+metadata:
+  name: vertex-ai-gcp
+  namespace: my-team
+spec:
+  gcp: {}
+```
+
+No `credentials` block is needed. The provider calls `google.DefaultTokenSource`,
+which on GKE Workload Identity reads the metadata server and returns the pod's
+bound GSA token.
+
+#### Hub-and-spoke impersonation (per-ProviderConfig service account)
+
+```yaml
+apiVersion: http.async.m.crossplane.io/v1alpha2
+kind: ProviderConfig
+metadata:
+  name: vertex-ai-team-a
+  namespace: my-team
+spec:
+  gcp:
+    serviceAccount: team-a@my-project.iam.gserviceaccount.com
+    scopes:
+      - https://www.googleapis.com/auth/cloud-platform
+```
+
+The hub GSA mints a token *as* `team-a` via the IAM `generateAccessToken` endpoint.
+Different ProviderConfigs can name different service accounts — one provider pod,
+many spoke identities, no service-account keys anywhere.
+
+`gcp` and `oidc` are mutually exclusive on a given config. At least one of
+`credentials`, `gcp`, or `oidc` must be set; combining `credentials` with an
+identity block is rejected with `Synced=False`.
+
 ### jq context
 
 | Expression | `.response` | `.poll.response` | `.status` |
@@ -189,6 +249,7 @@ spec:
 | External ID tracking | ✗ | ✓ `externalRef` + `status.externalRef` |
 | Import via annotation | ✗ | ✓ `crossplane.io/external-name` |
 | OIDC workload identity | ✗ | ✓ `oidc` on ProviderConfig / resource |
+| GCP native auth (ADC + impersonation) | ✗ | ✓ `gcp` on ProviderConfig / resource |
 | Backward compat | — | ✓ all existing manifests work unchanged |
 
 ### Examples

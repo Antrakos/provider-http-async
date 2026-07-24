@@ -88,6 +88,11 @@ func (r *AsyncRequestParameters) GetOIDC() *common.OIDCConfig {
 	return r.OIDC
 }
 
+// GetGCP returns the per-resource GCP auth override.
+func (r *AsyncRequestParameters) GetGCP() *common.GCPAuth {
+	return r.GCP
+}
+
 // Ensure Mapping implements HTTPMapping
 var _ interfaces.HTTPMapping = (*Mapping)(nil)
 

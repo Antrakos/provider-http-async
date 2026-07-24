@@ -56,6 +56,7 @@ const (
 	errGetLatestVersion        = "failed to get the latest version of the resource"
 	errExtractCredentials      = "cannot extract credentials"
 	errBuildTLSConfig          = "failed to build TLS configuration"
+	errInvalidAuthSelection    = "invalid auth configuration"
 
 	defaultProviderConfig = "default"
 )
@@ -128,6 +129,20 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 
 	h, err := c.buildHTTPClient(ctx, l, cr, pc)
 	if err != nil {
+		// Auth-selection violations are configuration errors, not transient
+		// failures: report the resource Synced=False so the reconciler stops
+		// re-firing until the spec is fixed, mirroring the existing terminal-error
+		// handling. Any other error (credential extraction, client construction)
+		// is a normal reconcile error.
+		var authErr *httpClient.AuthSelectionError
+		if errors.As(err, &authErr) {
+			cr.Status.SetConditions(
+				xpv2.Unavailable().WithMessage(authErr.Error()),
+				xpv2.ReconcileError(errors.Wrap(err, errInvalidAuthSelection)),
+			)
+			_ = c.kube.Status().Update(ctx, cr)
+			return nil, errors.Wrap(err, errInvalidAuthSelection)
+		}
 		return nil, err
 	}
 
@@ -144,10 +159,25 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	}, nil
 }
 
-// buildHTTPClient constructs the HTTP client, optionally wrapping it with OIDC.
+// buildHTTPClient constructs the HTTP client, resolving credentials and wrapping
+// it with an identity block (OIDC or GCP) when set. It enforces the auth-selection
+// rules (≥1 of credentials/gcp/oidc; gcp xor oidc; reject credentials+identity) by
+// returning an httpClient.AuthSelectionError, which the caller surfaces as a
+// Synced=False condition.
 func (c *connector) buildHTTPClient(ctx context.Context, l logging.Logger, cr *v1alpha2.AsyncRequest, pc *apisv1alpha1.ProviderConfig) (httpClient.Client, error) {
+	effectiveGCP := common.MergeGCPConfigs(cr.Spec.ForProvider.GCP, pc.Spec.GCP)
+	effectiveOIDC := common.MergeOIDCConfigs(cr.Spec.ForProvider.OIDC, pc.Spec.OIDC)
+
+	if err := httpClient.ValidateAuthSelection(httpClient.AuthSelection{
+		CredentialsSet: pc.Spec.Credentials != nil,
+		GCP:            effectiveGCP,
+		OIDC:           effectiveOIDC,
+	}); err != nil {
+		return nil, err
+	}
+
 	creds := ""
-	if pc.Spec.Credentials.Source == xpv2.CredentialsSourceSecret {
+	if pc.Spec.Credentials != nil && pc.Spec.Credentials.Source == xpv2.CredentialsSourceSecret {
 		data, err := resource.CommonCredentialExtractor(ctx, pc.Spec.Credentials.Source, c.kube, pc.Spec.Credentials.CommonCredentialSelectors)
 		if err != nil {
 			return nil, errors.Wrap(err, errExtractCredentials)
@@ -160,7 +190,13 @@ func (c *connector) buildHTTPClient(ctx context.Context, l logging.Logger, cr *v
 		return nil, errors.Wrap(err, errNewHttpClient)
 	}
 
-	if effectiveOIDC := common.MergeOIDCConfigs(cr.Spec.ForProvider.OIDC, pc.Spec.OIDC); effectiveOIDC != nil {
+	// gcp and oidc are validated as mutually exclusive above; at most one is set.
+	if effectiveGCP != nil {
+		h, err = httpClient.NewGCPClient(ctx, h, effectiveGCP)
+		if err != nil {
+			return nil, errors.Wrap(err, errNewHttpClient)
+		}
+	} else if effectiveOIDC != nil {
 		h = httpClient.NewOIDCClient(h, effectiveOIDC)
 	}
 	return h, nil

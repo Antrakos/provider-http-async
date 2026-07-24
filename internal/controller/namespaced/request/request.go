@@ -59,6 +59,8 @@ const (
 	errGetPC  = "cannot get ProviderConfig"
 	errGetCPC = "cannot get ClusterProviderConfig"
 
+	errInvalidAuthSelection = "invalid auth configuration"
+
 	defaultProviderConfig = "default"
 )
 
@@ -126,13 +128,26 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		l.Debug("No providerConfigRef specified, defaulting to 'default'")
 	}
 
-	cd, providerTLS, providerOIDC, err := c.resolveProviderConfig(ctx, mg)
+	cd, providerTLS, providerOIDC, providerGCP, err := c.resolveProviderConfig(ctx, mg)
 	if err != nil {
 		return nil, err
 	}
 
-	h, err := c.buildHTTPClient(ctx, l, cr, cd, providerOIDC)
+	h, err := c.buildHTTPClient(ctx, l, cr, cd, providerOIDC, providerGCP)
 	if err != nil {
+		// Auth-selection violations are configuration errors, not transient
+		// failures: report the resource Synced=False so the reconciler stops
+		// re-firing until the spec is fixed. Any other error (credential
+		// extraction, client construction) is a normal reconcile error.
+		var authErr *httpClient.AuthSelectionError
+		if errors.As(err, &authErr) {
+			cr.Status.SetConditions(
+				xpv2.Unavailable().WithMessage(authErr.Error()),
+				xpv2.ReconcileError(errors.Wrap(err, errInvalidAuthSelection)),
+			)
+			_ = c.kube.Status().Update(ctx, cr)
+			return nil, errors.Wrap(err, errInvalidAuthSelection)
+		}
 		return nil, err
 	}
 
@@ -149,41 +164,69 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 	}, nil
 }
 
-// resolveProviderConfig fetches credentials, TLS, and OIDC from the referenced ProviderConfig or ClusterProviderConfig.
-func (c *connector) resolveProviderConfig(ctx context.Context, mg resource.Managed) (apisv1alpha2.ProviderCredentials, *common.TLSConfig, *common.OIDCConfig, error) {
+// resolveProviderConfig fetches credentials, TLS, OIDC, and GCP from the referenced
+// ProviderConfig or ClusterProviderConfig. credentials is returned as a pointer
+// (nil when the config omits it, which is now valid since the credential-free
+// identity paths — gcp/oidc — are themselves authentication mechanisms).
+func (c *connector) resolveProviderConfig(ctx context.Context, mg resource.Managed) (*apisv1alpha2.ProviderCredentials, *common.TLSConfig, *common.OIDCConfig, *common.GCPAuth, error) {
 	m := mg.(resource.ModernManaged)
 	ref := m.GetProviderConfigReference()
 	switch ref.Kind {
 	case "ProviderConfig":
 		pc := &apisv1alpha2.ProviderConfig{}
 		if err := c.kube.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: m.GetNamespace()}, pc); err != nil {
-			return apisv1alpha2.ProviderCredentials{}, nil, nil, errors.Wrap(err, errGetPC)
+			return nil, nil, nil, nil, errors.Wrap(err, errGetPC)
 		}
-		return pc.Spec.Credentials, pc.Spec.TLS, pc.Spec.OIDC, nil
+		return pc.Spec.Credentials, pc.Spec.TLS, pc.Spec.OIDC, pc.Spec.GCP, nil
 	case "ClusterProviderConfig":
 		cpc := &apisv1alpha2.ClusterProviderConfig{}
 		if err := c.kube.Get(ctx, types.NamespacedName{Name: ref.Name}, cpc); err != nil {
-			return apisv1alpha2.ProviderCredentials{}, nil, nil, errors.Wrap(err, errGetCPC)
+			return nil, nil, nil, nil, errors.Wrap(err, errGetCPC)
 		}
-		return cpc.Spec.Credentials, cpc.Spec.TLS, cpc.Spec.OIDC, nil
+		return cpc.Spec.Credentials, cpc.Spec.TLS, cpc.Spec.OIDC, cpc.Spec.GCP, nil
 	default:
-		return apisv1alpha2.ProviderCredentials{}, nil, nil, errors.Errorf("unsupported provider config kind: %s", ref.Kind)
+		return nil, nil, nil, nil, errors.Errorf("unsupported provider config kind: %s", ref.Kind)
 	}
 }
 
-// buildHTTPClient constructs the HTTP client, optionally wrapping it with OIDC.
-func (c *connector) buildHTTPClient(ctx context.Context, l logging.Logger, cr *v1alpha2.AsyncRequest, cd apisv1alpha2.ProviderCredentials, providerOIDC *common.OIDCConfig) (httpClient.Client, error) {
-	data, err := resource.CommonCredentialExtractor(ctx, cd.Source, c.kube, cd.CommonCredentialSelectors)
-	if err != nil {
-		return nil, errors.Wrap(err, errExtractCredentials)
+// buildHTTPClient constructs the HTTP client, resolving credentials and wrapping
+// it with an identity block (OIDC or GCP) when set. It enforces the auth-selection
+// rules (≥1 of credentials/gcp/oidc; gcp xor oidc; reject credentials+identity) by
+// returning an httpClient.AuthSelectionError, which the caller surfaces as a
+// Synced=False condition.
+func (c *connector) buildHTTPClient(ctx context.Context, l logging.Logger, cr *v1alpha2.AsyncRequest, cd *apisv1alpha2.ProviderCredentials, providerOIDC *common.OIDCConfig, providerGCP *common.GCPAuth) (httpClient.Client, error) {
+	effectiveGCP := common.MergeGCPConfigs(cr.Spec.ForProvider.GCP, providerGCP)
+	effectiveOIDC := common.MergeOIDCConfigs(cr.Spec.ForProvider.OIDC, providerOIDC)
+
+	if err := httpClient.ValidateAuthSelection(httpClient.AuthSelection{
+		CredentialsSet: cd != nil,
+		GCP:            effectiveGCP,
+		OIDC:           effectiveOIDC,
+	}); err != nil {
+		return nil, err
 	}
 
-	h, err := c.newHttpClientFn(l, utils.WaitTimeout(cr.Spec.ForProvider.WaitTimeout), string(data))
+	creds := ""
+	if cd != nil {
+		data, err := resource.CommonCredentialExtractor(ctx, cd.Source, c.kube, cd.CommonCredentialSelectors)
+		if err != nil {
+			return nil, errors.Wrap(err, errExtractCredentials)
+		}
+		creds = string(data)
+	}
+
+	h, err := c.newHttpClientFn(l, utils.WaitTimeout(cr.Spec.ForProvider.WaitTimeout), creds)
 	if err != nil {
 		return nil, errors.Wrap(err, errNewHttpClient)
 	}
 
-	if effectiveOIDC := common.MergeOIDCConfigs(cr.Spec.ForProvider.OIDC, providerOIDC); effectiveOIDC != nil {
+	// gcp and oidc are validated as mutually exclusive above; at most one is set.
+	if effectiveGCP != nil {
+		h, err = httpClient.NewGCPClient(ctx, h, effectiveGCP)
+		if err != nil {
+			return nil, errors.Wrap(err, errNewHttpClient)
+		}
+	} else if effectiveOIDC != nil {
 		h = httpClient.NewOIDCClient(h, effectiveOIDC)
 	}
 	return h, nil
