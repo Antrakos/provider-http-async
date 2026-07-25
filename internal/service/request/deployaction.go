@@ -1,6 +1,8 @@
 package request
 
 import (
+	"strconv"
+
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,6 +18,7 @@ import (
 	"github.com/Antrakos/provider-http-async/internal/service/request/requestgen"
 	"github.com/Antrakos/provider-http-async/internal/service/request/requestmapping"
 	"github.com/Antrakos/provider-http-async/internal/service/request/statushandler"
+	"github.com/Antrakos/provider-http-async/internal/utils"
 )
 
 // DeployAction executes the action based on the given AsyncRequest resource and Mapping configuration.
@@ -77,7 +80,21 @@ func DeployAction(svcCtx *service.ServiceContext, crCtx *service.RequestCRContex
 			if hdlrErr != nil {
 				return hdlrErr
 			}
-			return statusHdlr.SetRequestStatus()
+			if err := statusHdlr.SetRequestStatus(); err != nil {
+				return err
+			}
+			// Surface a non-2xx mutate response (that is not in allowedStatusCodes) as a real
+			// error so the controller reports Synced=False (ReconcileError) instead of logging
+			// "Successfully requested update" and reporting ReconcileSuccess. Without this a
+			// PATCH/PUT/DELETE to a broken URL (e.g. .../models/ from an empty externalRef) that
+			// returns 404 is swallowed: SetRequestStatus increments the failures counter and
+			// returns nil, so the reconciler reports success and requeues forever — the loop is
+			// silent rather than merely stuck. Status is persisted first (above), so the
+			// response/statusCode/Failure counter stay visible alongside the failed reconcile.
+			if utils.IsHTTPError(details.HttpResponse.StatusCode, spec.GetAllowedStatusCodes()) {
+				return errors.Errorf(utils.ErrStatusCode, requestmapping.GetEffectiveMethod(mapping), strconv.Itoa(details.HttpResponse.StatusCode))
+			}
+			return nil
 		}
 
 		// Polling is configured: don't surface the mutate response to statusHandler yet.

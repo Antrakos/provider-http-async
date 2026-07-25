@@ -1393,3 +1393,78 @@ func TestObserve_DeletionMonitoring(t *testing.T) {
 		})
 	}
 }
+
+// TestObserve_EmptyExternalRef_ObserveURLReferencesIt_RoutesToCreate reproduces the
+// bug-empty-externalref-observe-hits-list-endpoint-skips-create.md regression end-to-end at
+// the controller boundary: a fresh AsyncRequest (no prior response, empty externalRef, no
+// in-flight anchor) whose OBSERVE URL is built as baseUrl + "/" + .status.externalRef.
+// Before the fix the empty externalRef collapsed the URL onto the collection endpoint
+// (.../models/), which returns 200, and Observe reported ResourceExists=true/UpToDate=false
+// so the controller called Update() — never Create(). Now the identity gate routes to
+// ResourceExists:false with no HTTP call made against the malformed URL, so the controller
+// calls Create() and the resource is actually provisioned.
+func TestObserve_EmptyExternalRef_ObserveURLReferencesIt_RoutesToCreate(t *testing.T) {
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			t.Errorf("OBSERVE must not fire when externalRef is empty and the URL references it; got %s %s", method, url)
+			return httpClient.HttpDetails{}, nil
+		},
+	}
+	localKube := &test.MockClient{
+		MockGet:          test.NewMockGetFn(nil),
+		MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+	}
+
+	// Fresh resource — the exact vertex-exp-model manifest shape (OBSERVE/UPDATE URLs key on
+	// .status.externalRef, CUSTOM expectedResponseCheck that would report drift against a list).
+	cr := namespacedRequest(func(cr *v1alpha2.AsyncRequest) {
+		cr.Generation = 1
+		cr.Status.Response = v1alpha2.Response{}
+		cr.Status.ExternalRef = ""
+		cr.Spec.ForProvider.Payload.BaseUrl = "https://aiplatform.googleapis.com/v1beta1/projects/p/locations/us-central1"
+		cr.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+			{Method: "POST", Action: "CREATE", URL: `.payload.baseUrl + "/models:upload"`, Body: ".payload.body"},
+			{Method: "GET", Action: "OBSERVE", URL: `.payload.baseUrl + "/models/" + .status.externalRef`},
+			{Method: "PATCH", Action: "UPDATE", URL: `.payload.baseUrl + "/models/" + .status.externalRef`},
+		}
+		cr.Spec.ForProvider.ExpectedResponseCheck = v1alpha2.ExpectedResponseCheck{
+			Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
+			Logic: `.response.body.displayName == .payload.body.model.displayName`,
+		}
+	})
+
+	e := &external{logger: logging.NewNopLogger(), localKube: localKube, http: httpMock}
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error %v", err)
+	}
+	if obs.ResourceExists {
+		t.Error("expected ResourceExists=false so the controller routes to Create(); got true (would route to Update and loop)")
+	}
+}
+
+// TestUpdate_BrokenURL_NonPolling_404_SurfacesError covers the secondary bug at the
+// controller boundary: when UPDATE routes to a non-polling PATCH against a broken URL (the
+// .../models/ list endpoint from an empty externalRef) and the API returns 404, DeployAction
+// must surface it as an error so the controller reports Synced=False, not ReconcileSuccess.
+func TestUpdate_BrokenURL_NonPolling_404_SurfacesError(t *testing.T) {
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: 404, Body: `{"error":"not found"}`}}, nil
+		},
+	}
+	localKube := &test.MockClient{
+		MockGet:          test.NewMockGetFn(nil),
+		MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+	}
+	cr := namespacedRequest(func(cr *v1alpha2.AsyncRequest) {
+		cr.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+			{Method: "PATCH", Action: "UPDATE", URL: `.payload.baseUrl + "/models/" + .status.externalRef`, Body: ".payload.body"},
+		}
+	})
+	e := &external{logger: logging.NewNopLogger(), localKube: localKube, http: httpMock}
+
+	if _, err := e.Update(context.Background(), cr); err == nil {
+		t.Error("expected Update to surface the 404 as an error (Synced=False), got nil (would report ReconcileSuccess and loop)")
+	}
+}

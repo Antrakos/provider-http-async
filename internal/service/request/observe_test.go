@@ -3,6 +3,7 @@ package request
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -402,6 +403,113 @@ func Test_isUpToDate(t *testing.T) {
 			},
 			want: want{
 				err: errors.New("OBSERVE or GET mapping doesn't exist in request, skipping operation"),
+			},
+		},
+		// Empty externalRef + OBSERVE URL referencing .status.externalRef + no prior identity:
+		// the URL collapses onto the collection endpoint (.../models/), which returns 200 with a
+		// list body. The identity gate routes to ErrObjectNotFound (Create) BEFORE firing the
+		// OBSERVE HTTP call — no malformed request is made. This is the vertex-exp-model regression
+		// (bug-empty-externalref-observe-hits-list-endpoint-skips-create.md): without the gate the
+		// 200 is read as "exists but drifted", UPDATE is fired to the same broken URL, PATCH 404 is
+		// swallowed, and CREATE is never called.
+		"EmptyExternalRef_ObserveURLReferencesIt_RoutesToCreate_NoHTTPCall": {
+			args: args{
+				http: &MockHttpClient{
+					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+						t.Errorf("OBSERVE must not fire when externalRef is empty and the URL references it; got %s %s", method, url)
+						return httpClient.HttpDetails{}, nil
+					},
+				},
+				localKube: &test.MockClient{
+					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+				},
+				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
+					// Fresh resource: no prior response, no externalRef, no anchor.
+					r.Status.Response = v1alpha2.Response{}
+					r.Status.ExternalRef = ""
+					r.Spec.ForProvider.Payload.BaseUrl = "https://aiplatform.googleapis.com/v1beta1/projects/p/locations/us-central1"
+					r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+						{Method: "POST", Action: "CREATE", URL: `.payload.baseUrl + "/models:upload"`, Body: ".payload.body"},
+						{Method: "GET", Action: "OBSERVE", URL: `.payload.baseUrl + "/models/" + .status.externalRef`},
+						{Method: "PATCH", Action: "UPDATE", URL: `.payload.baseUrl + "/models/" + .status.externalRef`},
+					}
+					// CUSTOM expectedResponseCheck that would report drift against a list body —
+					// proving the gate fires before drift detection, not via the missing-mapping terminal.
+					r.Spec.ForProvider.ExpectedResponseCheck = v1alpha2.ExpectedResponseCheck{
+						Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
+						Logic: `.response.body.displayName == .payload.body.model.displayName`,
+					}
+				}),
+			},
+			want: want{
+				err: errNotFound,
+			},
+		},
+		// The gate is URL-specific: a constant OBSERVE URL (or one not keyed on .status.externalRef)
+		// does not collapse when externalRef is empty, so OBSERVE must run and answer on its own
+		// merits. Here OBSERVE returns 200 (the imported resource exists at a fixed URL) and the
+		// CUSTOM check reports up-to-date — the resource is NOT routed to Create().
+		"EmptyExternalRef_ConstantObserveURL_ObserveRunsNormally": {
+			args: args{
+				http: &MockHttpClient{
+					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+						if !strings.HasPrefix(url, "http://some.org/") {
+							t.Errorf("expected OBSERVE against the constant URL, got %s", url)
+						}
+						return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+							StatusCode: 200,
+							Body:       `{"username":"john_doe"}`,
+						}}, nil
+					},
+				},
+				localKube: &test.MockClient{
+					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+				},
+				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
+					r.Status.Response = v1alpha2.Response{}
+					r.Status.ExternalRef = ""
+					r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+						{Method: "GET", Action: "OBSERVE", URL: `("http://some.org/" + "1423")`},
+					}
+				}),
+			},
+			want: want{
+				err: nil,
+				result: ObserveRequestDetails{
+					Synced: true,
+					Details: httpClient.HttpDetails{
+						HttpResponse: httpClient.HttpResponse{
+							StatusCode: 200,
+							Body:       `{"username":"john_doe"}`,
+						},
+					},
+				},
+			},
+		},
+		// The gate is identity-specific: once externalRef is set (an established identity, e.g.
+		// after CREATE+poll completed, or an import), OBSERVE runs against the real resource URL
+		// even though the template references externalRef. A 404 here still routes to Create() —
+		// via the existing HTTP-non-2xx gate, not the identity gate — proving the two coexist.
+		"ExternalRefSet_ObserveURLReferencesIt_ObserveRuns_404RoutesToCreate": {
+			args: args{
+				http: &MockHttpClient{
+					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+						return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: http.StatusNotFound}}, nil
+					},
+				},
+				localKube: &test.MockClient{
+					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+				},
+				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
+					r.Status.Response = v1alpha2.Response{}
+					r.Status.ExternalRef = "models/imported-789"
+					r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+						{Method: "GET", Action: "OBSERVE", URL: `.payload.baseUrl + "/models/" + .status.externalRef`},
+					}
+				}),
+			},
+			want: want{
+				err: errNotFound,
 			},
 		},
 		// resourceExistsCheck=false on a parent that always returns 200: the owned sub-resource is
@@ -878,6 +986,28 @@ func Test_isObjectValidForObservation(t *testing.T) {
 
 			if diff := cmp.Diff(tc.want.valid, got); diff != "" {
 				t.Errorf("isObjectValidForObservation(...): -want valid, +got valid: %s", diff)
+			}
+		})
+	}
+}
+
+func Test_urlReferencesExternalRef(t *testing.T) {
+	cases := map[string]struct {
+		url  string
+		want bool
+	}{
+		"ReferencesExternalRef":             {`.payload.baseUrl + "/models/" + .status.externalRef`, true},
+		"ReferencesExternalRefOnly":         {`.status.externalRef`, true},
+		"ConstantURL":                       {`("http://some.org/" + "1423")`, false},
+		"KeyedOnResponseBodyId":             {`(.payload.baseUrl + "/" + .response.body.id)`, false},
+		"Empty":                             {"", false},
+		"ReferencesPollResponseNotExternal": {`"https://host/" + .poll.response.body.name`, false},
+	}
+	for name, tc := range cases {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			if got := urlReferencesExternalRef(tc.url); got != tc.want {
+				t.Errorf("urlReferencesExternalRef(%q) = %v, want %v", tc.url, got, tc.want)
 			}
 		})
 	}

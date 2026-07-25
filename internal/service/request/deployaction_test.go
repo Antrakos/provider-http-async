@@ -2,6 +2,7 @@ package request
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -776,4 +777,111 @@ func (m *captureStartedAtPoller) Poll(
 ) (polling.Result, error) {
 	m.onPoll(crCtx.Status().GetOperationStartedAt())
 	return polling.Result{Done: true, PollResponse: map[string]interface{}{"body": map[string]interface{}{"id": "model-789"}}}, nil
+}
+
+// TestDeployAction_NonPolling_NonSuccess_SurfacesError covers the secondary bug in
+// bug-empty-externalref-observe-hits-list-endpoint-skips-create.md: a non-polling mutate
+// (PATCH/PUT/DELETE) that returns a non-2xx status not in allowedStatusCodes must surface as
+// a real error so the controller reports Synced=False, instead of being swallowed by
+// SetRequestStatus (which only increments the failures counter and returns nil) and looping
+// forever as ReconcileSuccess. Status is still persisted first, so the response stays visible.
+func TestDeployAction_NonPolling_NonSuccess_SurfacesError(t *testing.T) {
+	cases := []struct {
+		name       string
+		action     string
+		method     string
+		statusCode int
+	}{
+		{"UpdatePatch404", "UPDATE", "PATCH", 404},
+		{"UpdatePut500", "UPDATE", "PUT", 500},
+		{"RemoveDelete404", "REMOVE", "DELETE", 404},
+		{"CreatePost400", "CREATE", "POST", 400},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			httpMock := &MockHttpClient{
+				MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+					return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+						StatusCode: tc.statusCode, Body: `{"error":"not found"}`,
+					}}, nil
+				},
+			}
+			cr := &v1alpha2.AsyncRequest{
+				ObjectMeta: v1.ObjectMeta{Name: "test-broken-url", Namespace: "testns"},
+				Spec: v1alpha2.AsyncRequestSpec{
+					ForProvider: v1alpha2.AsyncRequestParameters{
+						Payload:  v1alpha2.Payload{Body: testBody, BaseUrl: testURL},
+						Mappings: []v1alpha2.Mapping{{Method: tc.method, Action: tc.action, Body: ".payload.body", URL: ".payload.baseUrl"}},
+					},
+				},
+			}
+			svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+			crCtx := service.NewRequestCRContext(cr)
+
+			err := DeployAction(svcCtx, crCtx, tc.action)
+			if err == nil {
+				t.Fatalf("expected DeployAction to surface HTTP %d as an error, got nil", tc.statusCode)
+			}
+			wantMsg := "HTTP " + tc.method + " request failed with status code: " + strconv.Itoa(tc.statusCode)
+			if err.Error() != wantMsg {
+				t.Errorf("error message: want %q, got %q", wantMsg, err.Error())
+			}
+			// Status is persisted before the error is returned, so the response stays visible.
+			if cr.Status.Response.StatusCode != tc.statusCode {
+				t.Errorf("expected persisted status code %d, got %d", tc.statusCode, cr.Status.Response.StatusCode)
+			}
+		})
+	}
+}
+
+// TestDeployAction_NonPolling_AllowedStatusCode_NotSurfaced: a non-2xx status that the user
+// explicitly allow-listed is not an error and must continue to reconcile successfully.
+func TestDeployAction_NonPolling_AllowedStatusCode_NotSurfaced(t *testing.T) {
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: 409, Body: `{}`}}, nil
+		},
+	}
+	cr := &v1alpha2.AsyncRequest{
+		ObjectMeta: v1.ObjectMeta{Name: "test-allowed", Namespace: "testns"},
+		Spec: v1alpha2.AsyncRequestSpec{
+			ForProvider: v1alpha2.AsyncRequestParameters{
+				Payload:            v1alpha2.Payload{Body: testBody, BaseUrl: testURL},
+				AllowedStatusCodes: []int{409},
+				Mappings:           []v1alpha2.Mapping{{Method: "PATCH", Action: "UPDATE", Body: ".payload.body", URL: ".payload.baseUrl"}},
+			},
+		},
+	}
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	crCtx := service.NewRequestCRContext(cr)
+
+	if err := DeployAction(svcCtx, crCtx, "UPDATE"); err != nil {
+		t.Fatalf("expected no error for allow-listed 409, got %v", err)
+	}
+}
+
+// TestDeployAction_NonPolling_Success_NotSurfaced: a 2xx non-polling mutate stays nil — the
+// fix only surfaces errors, it does not change the success path.
+func TestDeployAction_NonPolling_Success_NotSurfaced(t *testing.T) {
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: 200, Body: `{"id": "1"}`}}, nil
+		},
+	}
+	cr := &v1alpha2.AsyncRequest{
+		ObjectMeta: v1.ObjectMeta{Name: "test-ok", Namespace: "testns"},
+		Spec: v1alpha2.AsyncRequestSpec{
+			ForProvider: v1alpha2.AsyncRequestParameters{
+				Payload:  v1alpha2.Payload{Body: testBody, BaseUrl: testURL},
+				Mappings: []v1alpha2.Mapping{{Method: "PATCH", Action: "UPDATE", Body: ".payload.body", URL: ".payload.baseUrl"}},
+			},
+		},
+	}
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	crCtx := service.NewRequestCRContext(cr)
+
+	if err := DeployAction(svcCtx, crCtx, "UPDATE"); err != nil {
+		t.Fatalf("expected no error for 2xx, got %v", err)
+	}
 }

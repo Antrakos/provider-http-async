@@ -1191,3 +1191,80 @@ func TestObserve_DeletionMonitoring(t *testing.T) {
 		})
 	}
 }
+
+// TestObserve_EmptyExternalRef_ObserveURLReferencesIt_RoutesToCreate reproduces the
+// bug-empty-externalref-observe-hits-list-endpoint-skips-create.md regression at the
+// cluster-scoped controller boundary: a fresh resource (no prior response, empty
+// externalRef) whose OBSERVE URL keys on .status.externalRef must route to Create()
+// (ResourceExists:false) without firing OBSERVE against the collapsed collection URL.
+func TestObserve_EmptyExternalRef_ObserveURLReferencesIt_RoutesToCreate(t *testing.T) {
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			t.Errorf("OBSERVE must not fire when externalRef is empty and the URL references it; got %s %s", method, url)
+			return httpClient.HttpDetails{}, nil
+		},
+	}
+	localKube := &test.MockClient{
+		MockGet:          test.NewMockGetFn(nil),
+		MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+	}
+	cr := &v1alpha2.AsyncRequest{
+		ObjectMeta: v1.ObjectMeta{Name: "vertex-exp-model"},
+		Spec: v1alpha2.AsyncRequestSpec{
+			ForProvider: v1alpha2.AsyncRequestParameters{
+				Payload: v1alpha2.Payload{
+					BaseUrl: "https://aiplatform.googleapis.com/v1beta1/projects/p/locations/us-central1",
+				},
+				Mappings: []v1alpha2.Mapping{
+					{Method: "POST", Action: "CREATE", URL: `.payload.baseUrl + "/models:upload"`, Body: ".payload.body"},
+					{Method: "GET", Action: "OBSERVE", URL: `.payload.baseUrl + "/models/" + .status.externalRef`},
+					{Method: "PATCH", Action: "UPDATE", URL: `.payload.baseUrl + "/models/" + .status.externalRef`},
+				},
+				ExpectedResponseCheck: v1alpha2.ExpectedResponseCheck{
+					Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
+					Logic: `.response.body.displayName == .payload.body.model.displayName`,
+				},
+			},
+		},
+		// Fresh resource: empty externalRef, no prior response, no anchor.
+		Status: v1alpha2.AsyncRequestStatus{},
+	}
+	e := &external{logger: logging.NewNopLogger(), localKube: localKube, http: httpMock}
+	obs, err := e.Observe(context.Background(), cr)
+	if err != nil {
+		t.Fatalf("Observe: unexpected error %v", err)
+	}
+	if obs.ResourceExists {
+		t.Error("expected ResourceExists=false so the controller routes to Create(); got true (would route to Update and loop)")
+	}
+}
+
+// TestUpdate_BrokenURL_NonPolling_404_SurfacesError covers the secondary bug at the
+// cluster-scoped controller boundary: a non-polling UPDATE PATCH to a broken URL returning
+// 404 must surface as an error (Synced=False), not be swallowed as ReconcileSuccess.
+func TestUpdate_BrokenURL_NonPolling_404_SurfacesError(t *testing.T) {
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: 404, Body: `{"error":"not found"}`}}, nil
+		},
+	}
+	localKube := &test.MockClient{
+		MockGet:          test.NewMockGetFn(nil),
+		MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+	}
+	cr := &v1alpha2.AsyncRequest{
+		ObjectMeta: v1.ObjectMeta{Name: "vertex-exp-model"},
+		Spec: v1alpha2.AsyncRequestSpec{
+			ForProvider: v1alpha2.AsyncRequestParameters{
+				Payload: v1alpha2.Payload{BaseUrl: "https://aiplatform.googleapis.com/v1beta1/projects/p/locations/us-central1"},
+				Mappings: []v1alpha2.Mapping{
+					{Method: "PATCH", Action: "UPDATE", URL: `.payload.baseUrl + "/models/" + .status.externalRef`, Body: ".payload.body"},
+				},
+			},
+		},
+	}
+	e := &external{logger: logging.NewNopLogger(), localKube: localKube, http: httpMock}
+	if _, err := e.Update(context.Background(), cr); err == nil {
+		t.Error("expected Update to surface the 404 as an error (Synced=False), got nil (would report ReconcileSuccess and loop)")
+	}
+}

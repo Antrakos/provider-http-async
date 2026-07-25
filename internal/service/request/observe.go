@@ -2,6 +2,7 @@ package request
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -141,6 +142,28 @@ func IsUpToDate(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext)
 
 	objectNotCreated := !isObjectValidForObservation(crCtx)
 
+	// Identity gate: an OBSERVE URL built as baseUrl + "/" + .status.externalRef is
+	// meaningless while externalRef has never been set. With no identity ever established
+	// (no prior response, no anchor) such a URL collapses onto the resource's *collection*
+	// endpoint (e.g. .../models/), which a well-behaved API answers with 200 + a list body.
+	// That 200 is indistinguishable from "the resource exists" using the HTTP status alone, so
+	// the reconciler reads it as "exists but drifted" and routes to Update() — never Create().
+	// The correct "resource does not exist" signal before any identity is established is the
+	// absence of externalRef itself: report ErrObjectNotFound so the controller calls Create().
+	//
+	// This runs after the in-flight anchor gate above (which handles its own empty-externalRef
+	// case for the CREATE+poll resume) and after the OBSERVE mapping is resolved, so a missing
+	// OBSERVE mapping still surfaces its own error, and so the gate can check whether the URL
+	// actually depends on externalRef. It applies only when the URL template references
+	// .status.externalRef: a constant URL (or one keyed by .response.body.id) does not collapse
+	// when externalRef is empty, so OBSERVE must run and answer on its own merits. It is gated
+	// on objectNotCreated so a resource that already has a prior response / externalRef (an
+	// established identity, or an import) still observes normally — only a never-identified
+	// resource routes to Create() here. No HTTP call is made against the malformed URL.
+	if objectNotCreated && status.GetExternalRefValue() == "" && urlReferencesExternalRef(mapping.GetURL()) {
+		return FailedObserve(), errors.New(observe.ErrObjectNotFound)
+	}
+
 	// Evaluate the HTTP request template. If successfully templated, attempt to
 	// observe the resource.
 	requestDetails, err := requestgen.GenerateValidRequestDetails(svcCtx, crCtx, mapping)
@@ -275,4 +298,12 @@ func isObjectValidForObservation(crCtx *service.RequestCRContext) bool {
 		!(requestDetails.GetMethod() == http.MethodPost && utils.IsHTTPError(response.GetStatusCode(), spec.GetAllowedStatusCodes())) //nolint:staticcheck // De Morgan equivalent changes short-circuit behavior with 0 status code
 
 	return hasResponse || crCtx.Status().GetExternalRefValue() != ""
+}
+
+// urlReferencesExternalRef reports whether the OBSERVE URL jq template depends on
+// .status.externalRef. The identity gate routes a never-identified resource to Create() only
+// when the URL would be malformed by an empty externalRef; a constant URL, or one keyed by
+// .response.body.id, does not collapse and must be allowed to OBSERVE on its own merits.
+func urlReferencesExternalRef(urlTemplate string) bool {
+	return strings.Contains(urlTemplate, ".status.externalRef")
 }

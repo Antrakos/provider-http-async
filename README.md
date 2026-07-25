@@ -103,6 +103,19 @@ the in-flight anchor gate and **before** `expectedResponseCheck`:
 > response. That is the one case the HTTP status cannot answer: the parent's `200` tells
 > you the parent exists, not whether the sub-resource you own is in it.
 
+> **Identity gate before OBSERVE.** When a resource has never been identified (no
+> `externalRef`, no prior response, no in-flight anchor) and its OBSERVE URL is built as
+> `baseUrl + "/" + .status.externalRef`, the empty `externalRef` collapses the URL onto the
+> resource's *collection* endpoint (e.g. `.../models/`), which a well-behaved API answers
+> with `200` + a list body. That `200` is indistinguishable from "the resource exists" using
+> the HTTP status alone, so the reconciler routes such a resource to `Create()` **before**
+> firing OBSERVE, treating the absence of any established identity as "resource does not
+> exist". This applies only when the OBSERVE URL template references `.status.externalRef`
+> and no identity has been set; a constant URL (or one keyed by `.response.body.id`) does
+> not collapse and OBSERVEs normally, and a resource that already has `externalRef` or a
+> prior response OBSERVEs normally too. (The in-flight anchor gate handles its own
+> empty-`externalRef` case for the CREATE+poll resume.)
+
 ```yaml
 mappings:
   - action: CREATE
@@ -158,6 +171,7 @@ alone, without reading pod logs:
 | In-flight long-running operation (poll still running, budget exhausted per reconcile) | `False` (`Creating`) | `True` (`ReconcileSuccess`) | — |
 | Terminal poll/config failure (bad/empty `polling.url`, `polling.error` non-null, timeout) | `False` (`Unavailable`) | `False` (`ReconcileError`) | `Terminal error: <detail>` |
 | CUSTOM check reports drift with no UPDATE/PUT mapping | `False` (`Unavailable`) | `False` (`ReconcileError`) | `Terminal error: no UPDATE or PUT mapping is configured but the resource is out of sync …` |
+| Non-polling mutate (CREATE/UPDATE/REMOVE) returns non-2xx not in `allowedStatusCodes` | `True`/`False` (unchanged by reconcile) | `False` (`ReconcileError`) | `HTTP <METHOD> request failed with status code: <code>` |
 
 > The "in-flight" row is the steady state while a long-running operation's poll
 > is still running — each reconcile re-enters the poll, exhausts its per-reconcile
@@ -166,6 +180,13 @@ alone, without reading pod logs:
 > reconcile in which the poll *completes* or *fails terminally* transitions to the
 > "Up to date" or "Terminal" row instead, so `Synced` is only reliably `True` while
 > the poll keeps running.
+
+> A **non-polling** mutate (a CREATE/UPDATE/REMOVE mapping with no `polling` block) that
+> returns a non-2xx status not listed in `allowedStatusCodes` is surfaced as a reconcile
+> error (`Synced=False`, `ReconcileError`). The response, status code, and failure counter
+> are persisted first, so they stay visible alongside the failed reconcile. Polling
+> mutates surface failure through `polling.error` / timeout instead — see the terminal row
+> above.
 
 A terminal failure is stable: the provider persists it to
 `status.polling.terminalError` (with `observedGeneration`) and stops re-firing
