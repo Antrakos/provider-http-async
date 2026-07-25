@@ -48,6 +48,6 @@ func Setup(mgr ctrl.Manager, o controller.Options, timeout time.Duration) error 
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
 		For(&v1alpha1.ProviderConfig{}).
-		Watches(&v1alpha1.ProviderConfigUsage{}, &resource.EnqueueRequestForProviderConfig{}).
+		Watches(&v1alpha1.ProviderConfigUsage{}, &resource.EnqueueRequestForProviderConfig{Kind: "ProviderConfig"}).
 		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
 }

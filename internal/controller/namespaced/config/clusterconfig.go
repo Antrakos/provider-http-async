@@ -48,6 +48,6 @@ func SetupCluster(mgr ctrl.Manager, o controller.Options, timeout time.Duration)
 		Named(name).
 		WithOptions(o.ForControllerRuntime()).
 		For(&v1alpha2.ClusterProviderConfig{}).
-		Watches(&v1alpha2.ClusterProviderConfigUsage{}, &resource.EnqueueRequestForProviderConfig{}).
+		Watches(&v1alpha2.ClusterProviderConfigUsage{}, &resource.EnqueueRequestForProviderConfig{Kind: "ClusterProviderConfig"}).
 		Complete(ratelimiter.NewReconciler(name, r, o.GlobalRateLimiter))
 }
