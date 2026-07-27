@@ -24,6 +24,7 @@ limitations under the License.
 package polling
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"time"
@@ -59,6 +60,12 @@ type Result struct {
 	// a terminal condition, not a Go error. The anchor (polling.response) is retained so
 	// a corrected spec resumes the existing operation instead of re-creating it.
 	TerminalErr string
+	// TerminalResponse is the full poll HTTP response (body/headers/statusCode) captured at
+	// the moment a poll terminated with an error, set only on the polling.error branch (nil
+	// for configuration/timeout terminals). A classifier keys off its HTTP statusCode and
+	// structured body (parse Body) the way it would off a mutate response, independent of
+	// what the user's polling.error expression extracted into TerminalErr.
+	TerminalResponse *httpClient.HttpResponse
 }
 
 // Poller runs the poll loop for a long-running operation.
@@ -201,12 +208,19 @@ func (fp *foregroundPoller) Poll(
 					return Result{}, errors.Wrap(checkErr, "failed to evaluate polling.error")
 				}
 				if exists {
-					terminalMsg, _ := jq.ParseString(errExpr, jqCtx)
-					if terminalMsg == "" {
-						// non-string non-null error value: stringify it
-						terminalMsg = errExpr + " returned non-null"
+					// Evaluate polling.error for the human message (any jq type). The full poll
+					// HTTP response is retained separately in TerminalResponse so a classifier can
+					// key off the HTTP statusCode and the structured body (parse Body) regardless
+					// of what the user's polling.error expression happened to extract.
+					errVal, valErr := jq.ParseAny(errExpr, jqCtx)
+					if valErr != nil {
+						return Result{}, errors.Wrap(valErr, "failed to evaluate polling.error")
 					}
-					return Result{OperationURL: operationURL, TerminalErr: terminalMsg}, nil
+					return Result{
+						OperationURL:     operationURL,
+						TerminalErr:      terminalMessageFromValue(errVal, errExpr),
+						TerminalResponse: &pollResp.HttpResponse,
+					}, nil
 				}
 			}
 			return Result{Done: true, OperationURL: operationURL, PollResponse: pollResponseMap}, nil
@@ -222,6 +236,29 @@ func (fp *foregroundPoller) Poll(
 			return Result{}, svcCtx.Ctx.Err()
 		case <-timer.C:
 		}
+	}
+}
+
+// terminalMessageFromValue projects the raw polling.error value onto the single string
+// the Ready condition and status.error carry. A string is surfaced verbatim; a structured
+// value (object/array) is JSON-marshaled so the operator still sees its shape in the
+// condition while the structured value is retained in terminalResponse for classification;
+// any scalar (number/boolean) is fmt.Sprint'd. The raw value itself is persisted untouched
+// in terminalResponse, so this is a projection only — nothing is lost.
+func terminalMessageFromValue(v interface{}, errExpr string) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case map[string]interface{}, []interface{}:
+		raw, err := json.Marshal(t)
+		if err != nil {
+			// An in-memory map/array that fails to marshal is a programming error; fall back
+			// to the opaque marker rather than losing the terminal entirely.
+			return errExpr + " returned a non-serializable value"
+		}
+		return string(raw)
+	default:
+		return fmt.Sprint(t)
 	}
 }
 
@@ -268,13 +305,16 @@ func ResponseToMap(resp *httpClient.HttpResponse) map[string]interface{} {
 
 // SetTerminalFailure marks the resource as terminally failed due to a poll or config error.
 // It persists the message and records the current generation so a later spec change clears
-// the terminal state and retries. It deliberately PRESERVES status.polling.response (and
-// StartedAt): the operation is already in flight, and a corrected polling.url must resume it
-// rather than re-create it — clearing the anchor here would reintroduce the duplicate. Only
-// clearTerminalError (on generation drift) and the completion path touch the anchor. It
-// deliberately does not increment the failure counter: a terminal failure is a stable state,
-// not a transient retry. RetryOnConflict handles optimistic-lock conflicts.
-func SetTerminalFailure(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext, terminalErr string) error {
+// the terminal state and retries. terminalResponse carries the full poll HTTP response (set
+// only on the polling.error branch — pass nil for configuration/timeout terminals) so a
+// classifier can key off its HTTP statusCode and structured body. It deliberately PRESERVES
+// status.polling.response (and StartedAt): the operation is already in flight, and a corrected
+// polling.url must resume it rather than re-create it — clearing the anchor here would
+// reintroduce the duplicate. Only clearTerminalError (on generation drift) and the completion
+// path touch the anchor. It deliberately does not increment the failure counter: a terminal
+// failure is a stable state, not a transient retry. RetryOnConflict handles optimistic-lock
+// conflicts.
+func SetTerminalFailure(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext, terminalErr string, terminalResponse interfaces.HTTPResponse) error {
 	resource := crCtx.GetCR()
 	nn := types.NamespacedName{Name: resource.GetName(), Namespace: resource.GetNamespace()}
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -283,6 +323,7 @@ func SetTerminalFailure(svcCtx *service.ServiceContext, crCtx *service.RequestCR
 		}
 		sw := crCtx.StatusWriter()
 		sw.SetTerminalError(terminalErr)
+		sw.SetTerminalResponse(terminalResponse)
 		sw.SetObservedGeneration(crCtx.Status().GetGeneration())
 		return svcCtx.LocalKube.Status().Update(svcCtx.Ctx, resource)
 	})

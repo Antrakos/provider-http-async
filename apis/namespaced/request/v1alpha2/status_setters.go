@@ -6,6 +6,8 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/Antrakos/provider-http-async/apis/interfaces"
 )
 
 func (d *AsyncRequest) SetStatusCode(statusCode int) {
@@ -73,6 +75,23 @@ func (d *AsyncRequest) SetPollingResponse(m map[string]interface{}) {
 func (d *AsyncRequest) SetTerminalError(msg string) {
 	d.Status.Polling.TerminalError = msg
 	d.Status.Error = msg
+}
+
+// SetTerminalResponse persists (or clears, when resp is nil) the full poll HTTP response
+// captured at the moment a poll terminated with an error. Unlike SetPollingResponse it
+// stores a typed Response (statusCode/body/headers) rather than a RawExtension, so a
+// classifier reads real fields — statusCode as an int, body as the raw JSON string to
+// parse, headers as a typed map — instead of grovelling a map[string]interface{}.
+func (d *AsyncRequest) SetTerminalResponse(resp interfaces.HTTPResponse) {
+	if resp == nil {
+		d.Status.Polling.TerminalResponse = nil
+		return
+	}
+	d.Status.Polling.TerminalResponse = &Response{
+		StatusCode: resp.GetStatusCode(),
+		Body:       resp.GetBody(),
+		Headers:    resp.GetHeaders(),
+	}
 }
 
 func (d *AsyncRequest) SetObservedGeneration(generation int64) {

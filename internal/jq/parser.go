@@ -43,6 +43,15 @@ func runJQQuery(jqQuery string, obj interface{}) (interface{}, error) {
 	return queryRes, nil
 }
 
+// ParseAny runs a jq query and returns the raw result with no type coercion, so the
+// caller can key off the value's native shape (string, number, bool, map, array). It is
+// the reader for polling.error, whose type is user-defined: a string message, a numeric
+// code, or a structured error object. jq's null is returned as a typed nil interface so
+// the caller can distinguish "no error" from "error that evaluated to null".
+func ParseAny(jqQuery string, obj interface{}) (interface{}, error) {
+	return runJQQuery(jqQuery, obj)
+}
+
 // ParseString runs a jq query on a given object and returns the result as a string.
 func ParseString(jqQuery string, obj interface{}) (string, error) {
 	queryRes, err := runJQQuery(jqQuery, obj)

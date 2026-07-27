@@ -150,6 +150,94 @@ func TestPoll_TerminalError(t *testing.T) {
 	}
 }
 
+// TestPoll_TerminalError_StructuredResponse verifies that when polling.error evaluates to
+// a structured object, Poll captures the FULL poll HTTP response in Result.TerminalResponse
+// (so a classifier can key off .body.error.code and the HTTP statusCode) while TerminalErr
+// carries the JSON projection of the polling.error value for the Ready condition. This is
+// the crux of the terminalResponse field: previously ParseString failed on the object and
+// degraded TerminalErr to "<expr> returned non-null", losing the structured shape entirely;
+// and retaining only the jq value would have dropped the HTTP statusCode and any body fields
+// the user's polling.error expression did not extract.
+func TestPoll_TerminalError_StructuredResponse(t *testing.T) {
+	srv := terminalErrorServer(t) // body: {"done":true,"error":{"code":429,"message":"quota exceeded"}}
+	defer srv.Close()
+
+	cr := &clusterv1alpha2.AsyncRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-terminal-structured", Namespace: "default"},
+	}
+	cr.Spec.ForProvider = clusterv1alpha2.AsyncRequestParameters{
+		Payload:  clusterv1alpha2.Payload{BaseUrl: "https://example.com"},
+		Mappings: []clusterv1alpha2.Mapping{*buildMapping(srv)},
+	}
+
+	kube := buildFakeKube(cr)
+	svcCtx := buildSvcCtx(t, kube, buildHTTPClient(t))
+	crCtx := buildCRCtx(cr)
+	mapping := buildMapping(srv)
+
+	p := New()
+	result, err := p.Poll(svcCtx, crCtx, mapping, nil)
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	if result.TerminalErr == "" {
+		t.Fatal("expected TerminalErr to be non-empty")
+	}
+	// The FULL poll response is retained as a typed HttpResponse: statusCode, body, and
+	// headers — a classifier keys off these real fields, independent of what polling.error
+	// extracted into TerminalErr.
+	resp := result.TerminalResponse
+	if resp == nil {
+		t.Fatal("expected TerminalResponse to be set")
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("expected TerminalResponse .StatusCode == 200, got %d", resp.StatusCode)
+	}
+	// Body is the raw JSON string; a classifier parses it to reach .body.error.code.
+	var body map[string]interface{}
+	if err := json.Unmarshal([]byte(resp.Body), &body); err != nil {
+		t.Fatalf("expected TerminalResponse .Body to be JSON, got %q: %v", resp.Body, err)
+	}
+	errObj, _ := body["error"].(map[string]interface{})
+	if code, _ := errObj["code"].(float64); int(code) != 429 {
+		t.Errorf("expected TerminalResponse .body.error.code == 429, got %v", errObj["code"])
+	}
+	if msg, _ := errObj["message"].(string); msg != "quota exceeded" {
+		t.Errorf("expected TerminalResponse .body.error.message == %q, got %q", "quota exceeded", msg)
+	}
+	// TerminalErr is the JSON projection of the polling.error VALUE (not the full response),
+	// not the old opaque marker — the human message stays compact for the Ready condition.
+	if result.TerminalErr == `.poll.response.body.error returned non-null` {
+		t.Error("TerminalErr degraded to the opaque non-null marker; expected the JSON projection")
+	}
+	if result.TerminalErr != `{"code":429,"message":"quota exceeded"}` {
+		t.Errorf("expected TerminalErr to be the JSON projection, got %q", result.TerminalErr)
+	}
+}
+
+// TestTerminalMessageFromValue covers the string/number/object/array projections the
+// poller derives from a raw polling.error value for the Ready condition message.
+func TestTerminalMessageFromValue(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		val  interface{}
+		want string
+	}{
+		{"string", "quota exceeded", "quota exceeded"},
+		{"number", 429, "429"},
+		{"boolean", false, "false"},
+		{"object", map[string]interface{}{"code": 429, "message": "quota exceeded"},
+			`{"code":429,"message":"quota exceeded"}`},
+		{"array", []interface{}{1, 2, 3}, "[1,2,3]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := terminalMessageFromValue(tc.val, ".poll.response.body.error"); got != tc.want {
+				t.Errorf("terminalMessageFromValue(%v) = %q, want %q", tc.val, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestPoll_Resume_RecomputesURL verifies that on a resume (anchor persisted) the poll
 // URL is recomputed from the mutate response rather than frozen. The polling.url
 // expression derives the URL from .response.body.name, and the persisted mutate response
@@ -432,8 +520,8 @@ func TestPoll_Timeout_CrossReconcile(t *testing.T) {
 
 // TestSetTerminalFailure_PreservesAnchor verifies the crux inversion: SetTerminalFailure
 // must PRESERVE the polling.response anchor (and StartedAt) so a corrected polling.url
-// resumes the in-flight operation instead of re-creating it. Only the terminal message
-// and observedGeneration are written.
+// resumes the in-flight operation instead of re-creating it. Only the terminal message,
+// terminalResponse and observedGeneration are written.
 func TestSetTerminalFailure_PreservesAnchor(t *testing.T) {
 	startedAt := metav1.Now()
 	anchor := map[string]interface{}{"body": map[string]interface{}{"name": "op-1"}}
@@ -443,11 +531,27 @@ func TestSetTerminalFailure_PreservesAnchor(t *testing.T) {
 	cr.SetPollingResponse(anchor)
 	cr.Status.Polling.StartedAt = &startedAt
 
+	// Mirror the real caller: the poller evaluates polling.error to an error value (here
+	// RESOURCE_EXHAUSTED with a code), projects it to a string for the Ready condition, and
+	// retains the FULL poll HttpResponse in terminalResponse so a classifier can key off
+	// the typed StatusCode and the structured Body.
+	errVal := map[string]interface{}{"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "quota exceeded"}
+	msg := terminalMessageFromValue(errVal, ".poll.response.body.error")
+	bodyJSON, err := json.Marshal(map[string]interface{}{"error": errVal})
+	if err != nil {
+		t.Fatalf("failed to marshal test body: %v", err)
+	}
+	fullResponse := &httpClient.HttpResponse{
+		StatusCode: 429,
+		Body:       string(bodyJSON),
+		Headers:    map[string][]string{"Content-Type": {"application/json"}},
+	}
+
 	kube := buildFakeKube(cr)
 	svcCtx := buildSvcCtx(t, kube, buildHTTPClient(t))
 	crCtx := buildCRCtx(cr)
 
-	if err := SetTerminalFailure(svcCtx, crCtx, "quota exceeded"); err != nil {
+	if err := SetTerminalFailure(svcCtx, crCtx, msg, fullResponse); err != nil {
 		t.Fatalf("SetTerminalFailure failed: %v", err)
 	}
 	// The anchor must survive a terminal failure.
@@ -464,7 +568,26 @@ func TestSetTerminalFailure_PreservesAnchor(t *testing.T) {
 		t.Errorf("expected OperationStartedAt wall time unchanged, got %v want %v",
 			cr.Status.Polling.StartedAt.Time, startedAt.Time)
 	}
-	if cr.Status.Polling.TerminalError == "" {
-		t.Error("expected TerminalError to be set")
+	if cr.Status.Polling.TerminalError != `{"code":429,"message":"quota exceeded","status":"RESOURCE_EXHAUSTED"}` {
+		t.Errorf("expected TerminalError to be the JSON projection of the value, got %q",
+			cr.Status.Polling.TerminalError)
+	}
+	// The full poll response is retained as a typed Response so a classifier can key off
+	// the HTTP StatusCode and parse Body for .error.code — the crux of the terminalResponse
+	// field. GetTerminalResponse returns a nil interface when unset (no typed-nil trap).
+	got := cr.GetTerminalResponse()
+	if got == nil {
+		t.Fatal("expected TerminalResponse to be set for a structured polling.error value")
+	}
+	if got.GetStatusCode() != 429 {
+		t.Errorf("expected TerminalResponse StatusCode == 429, got %d", got.GetStatusCode())
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal([]byte(got.GetBody()), &body); err != nil {
+		t.Fatalf("expected TerminalResponse Body to be JSON, got %q: %v", got.GetBody(), err)
+	}
+	errObj, _ := body["error"].(map[string]interface{})
+	if code, _ := errObj["code"].(float64); int(code) != 429 {
+		t.Errorf("expected TerminalResponse Body .error.code == 429, got %v", errObj["code"])
 	}
 }

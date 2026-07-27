@@ -197,7 +197,8 @@ type AsyncRequestStatus struct {
 
 // PollingStatus groups the fields that track an in-flight long-running operation.
 // Response is set when the mutate call succeeds and cleared only when the operation
-// completes; StartedAt and TerminalError track its lifetime.
+// completes; StartedAt tracks its lifetime; TerminalError and TerminalResponse carry
+// a terminal failure (StartedAt and the Response anchor are retained across one).
 type PollingStatus struct {
 	// Response is the raw response from the mutate call (CREATE/UPDATE/DELETE) whose
 	// long-running operation is being polled. It is the crash-recovery anchor: while
@@ -215,12 +216,24 @@ type PollingStatus struct {
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
 
-	// TerminalError holds the verbatim message from a terminal poll failure
-	// (polling.error non-null, or a permanent configuration error). While set, the
-	// controller reports the resource unhealthy and stops re-firing the mutate call
-	// until the spec changes (tracked via observedGeneration). Cleared on recovery.
+	// TerminalError holds the human message from a terminal poll failure: the value the
+	// user's polling.error jq expression returned, coerced to a string (a structured
+	// object/array is JSON-marshaled, a scalar is fmt.Sprint'd); or a provider-authored
+	// message for a configuration/timeout terminal. While set, the controller reports the
+	// resource unhealthy and stops re-firing the mutate call until the spec changes
+	// (tracked via observedGeneration). Cleared on recovery together with terminalResponse.
 	// +optional
 	TerminalError string `json:"terminalError,omitempty"`
+
+	// TerminalResponse holds the full poll HTTP response (body/headers/statusCode) captured
+	// at the moment a poll terminated with an error, so a classifier can key off its typed
+	// statusCode and structured body (e.g. .body.error.code) the way it would off a mutate
+	// response — independent of what polling.error extracted into terminalError. Only the
+	// polling.error branch of the poll loop populates this; configuration and timeout terminal
+	// failures leave it nil and write terminalError only. Cleared on recovery together with
+	// terminalError.
+	// +optional
+	TerminalResponse *Response `json:"terminalResponse,omitempty"`
 }
 
 type Cache struct {

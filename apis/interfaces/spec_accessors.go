@@ -291,6 +291,11 @@ type RequestStatusReader interface {
 	// the resource is not in a terminal failure state.
 	GetTerminalError() string
 
+	// GetTerminalResponse returns the full poll HTTP response captured when the poll
+	// terminated with an error, or nil when the terminal failure was a configuration/
+	// timeout error or the resource is not in a terminal failure state.
+	GetTerminalResponse() HTTPResponse
+
 	// GetObservedGeneration returns the metadata.generation at which the resource last
 	// reached a ready or terminally-stalled state.
 	GetObservedGeneration() int64
@@ -323,6 +328,12 @@ type RequestStatusWriter interface {
 	// message. It does not increment the failure counter — a terminal failure is a
 	// stable state, not a transient retry.
 	SetTerminalError(msg string)
+
+	// SetTerminalResponse persists (or clears, when passed nil) the full poll HTTP response
+	// captured at the moment a poll terminated with an error. Only the polling.error branch
+	// of the poll loop sets this; configuration and timeout terminal failures leave it nil
+	// and write terminalError alone. Cleared on recovery together with terminalError.
+	SetTerminalResponse(resp HTTPResponse)
 
 	// SetObservedGeneration records the metadata.generation at which the resource
 	// reached a ready or terminally-stalled state.

@@ -226,6 +226,18 @@ func (r *AsyncRequest) GetTerminalError() string {
 	return r.Status.Polling.TerminalError
 }
 
+// GetTerminalResponse returns the full poll HTTP response captured when the poll
+// terminated with an error, or nil when the terminal failure was a configuration/timeout
+// error (not a polling.error result) or the resource is not in a terminal failure state.
+// A classifier keys off its typed statusCode and structured body (parse the JSON Body)
+// the way it would off a mutate response, independent of what polling.error extracted.
+func (r *AsyncRequest) GetTerminalResponse() interfaces.HTTPResponse {
+	if r.Status.Polling.TerminalResponse == nil {
+		return nil
+	}
+	return r.Status.Polling.TerminalResponse
+}
+
 // GetObservedGeneration returns the generation at which the resource last reached a
 // ready or terminally-stalled state.
 func (r *AsyncRequest) GetObservedGeneration() int64 {

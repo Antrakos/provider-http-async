@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 
+	"github.com/Antrakos/provider-http-async/apis/interfaces"
 	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
 	datapatcher "github.com/Antrakos/provider-http-async/internal/data-patcher"
 	"github.com/Antrakos/provider-http-async/internal/jq"
@@ -145,7 +146,14 @@ func DeployAction(svcCtx *service.ServiceContext, crCtx *service.RequestCRContex
 		// Terminal poll failure (polling.error non-null, bad/empty polling.url, or
 		// timeout): set Ready=False, Synced=False and record the generation; the anchor is
 		// PRESERVED so a spec change resumes the existing operation rather than re-creating.
-		return polling.SetTerminalFailure(svcCtx, crCtx, result.TerminalErr)
+		// terminalResponse is set only on the polling.error branch; pass a plain nil
+		// interface (not the nil *HttpResponse) for bad/empty polling.url and timeout so the
+		// setter clears the field rather than storing an empty Response via a typed nil.
+		var resp interfaces.HTTPResponse
+		if result.TerminalResponse != nil {
+			resp = result.TerminalResponse
+		}
+		return polling.SetTerminalFailure(svcCtx, crCtx, result.TerminalErr, resp)
 	}
 
 	if !result.Done {
