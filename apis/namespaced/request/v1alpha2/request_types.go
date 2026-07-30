@@ -47,6 +47,7 @@ type AsyncRequestParameters struct {
 	// Mappings defines the HTTP mappings for different methods.
 	// Either Method or Action must be specified. If both are omitted, the mapping will not be used.
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=5
 	Mappings []Mapping `json:"mappings"`
 
 	// Payload defines the payload for the request.
