@@ -26,7 +26,7 @@ spec:
         url: '.payload.baseUrl + "/models:upload"'
         body: .payload.body
         polling:
-          url: .response.body.name
+          url: '"https://us-central1-aiplatform.googleapis.com/v1beta1/" + .response.body.name'
           done: .poll.response.body.done == true
           error: .poll.response.body.error
           timeout: 30m
@@ -38,15 +38,16 @@ spec:
 
       - action: UPDATE
         method: PATCH
-        url: '.payload.baseUrl + "/models/" + .status.externalRef'
+        url: '.payload.baseUrl + "/models/" + .status.externalRef + "?updateMask=displayName"'
         body: '{"displayName": .payload.body.model.displayName}'
 
       - action: REMOVE
         method: DELETE
         url: '.payload.baseUrl + "/models/" + .status.externalRef'
         polling:
-          url: .response.body.name
+          url: '"https://us-central1-aiplatform.googleapis.com/v1beta1/" + .response.body.name'
           done: .poll.response.body.done == true
+          error: .poll.response.body.error
           timeout: 10m
 
     expectedResponseCheck:

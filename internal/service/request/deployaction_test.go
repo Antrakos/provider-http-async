@@ -517,19 +517,81 @@ func TestDeployAction_AsyncCreate_OperationFailure_RetryByDefault(t *testing.T) 
 	if cr.Status.Response.Body == "" {
 		t.Error("expected failing poll response surfaced to status.response on poll-failure retry")
 	}
-	// Option 2: the write is shaped as a failed-mutate equivalent so base's routing guard
-	// (isObjectValidForObservation: !(method==POST && IsHTTPError(statusCode))) reads the resource
-	// as NOT created and the next reconcile re-fires CREATE. Both fields are required.
-	if cr.Status.Response.StatusCode != pollFailureStatusCode {
-		t.Errorf("expected status.response.statusCode overridden to %d (failed-mutate shape), got %d", pollFailureStatusCode, cr.Status.Response.StatusCode)
+	// The REAL status code is persisted (a wire-200 for an LRO that completed with an error body)
+	// — no faked 5xx. Routing on the externalRef path consults .status.externalRef, never
+	// .status.response, so the write is inert to routing by construction.
+	if cr.Status.Response.StatusCode != 200 {
+		t.Errorf("expected status.response.statusCode to be the real poll code 200, got %d", cr.Status.Response.StatusCode)
 	}
+	// method is stamped POST for inspection (this records the CREATE's failure outcome), but
+	// routing does not read it on the externalRef path.
 	if cr.Status.RequestDetails.Method != http.MethodPost {
-		t.Errorf("expected status.requestDetails.method stamped POST (failed-mutate shape), got %q", cr.Status.RequestDetails.Method)
+		t.Errorf("expected status.requestDetails.method stamped POST (inspection), got %q", cr.Status.RequestDetails.Method)
 	}
 	// The failure counter is NOT incremented: a poll GET is a read, so even though we persist a
 	// 500 it must bypass statushandler's incrementFailures and leave .status.failed untouched.
 	if cr.Status.Failed != 0 {
 		t.Errorf("expected status.failed unchanged (0) on poll-failure retry, got %d", cr.Status.Failed)
+	}
+}
+
+// TestDeployAction_AsyncCreate_PollFailure_RealStatusCode_NotPoisoningIsTerminalError is the
+// PRD's defect-fix regression: isTerminalError reading .status.response.statusCode must see the
+// REAL wire code, not a provider-faked 5xx. A completed-with-error LRO returns HTTP 200 with an
+// error block in the body; persistPollFailureResponse now stores that real 200. With the previous
+// 500 override, `.status.response.statusCode >= 500` would classify EVERY wire-200 poll failure as
+// terminal (the provider's own lie, not the API's response). Now 200 >= 500 is false → retry.
+func TestDeployAction_AsyncCreate_PollFailure_RealStatusCode_NotPoisoningIsTerminalError(t *testing.T) {
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			if method == "POST" {
+				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+					StatusCode: 202, Body: `{"name": "operations/456"}`,
+				}}, nil
+			}
+			// Wire-200 with an error body: the LRO finished in failure.
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+				StatusCode: 200,
+				Body:       `{"done": true, "error": {"message": "quota exceeded"}}`,
+			}}, nil
+		},
+	}
+
+	cr := &v1alpha2.AsyncRequest{
+		ObjectMeta: v1.ObjectMeta{Name: "test-not-poisoned", Namespace: "testns"},
+		Spec: v1alpha2.AsyncRequestSpec{
+			ForProvider: v1alpha2.AsyncRequestParameters{
+				Payload: v1alpha2.Payload{Body: testBody, BaseUrl: testURL},
+				// Keys off .status.response.statusCode. With the 500 lie this would fire on every
+				// wire-200 poll failure; with the real 200 it must NOT (200 >= 500 is false).
+				IsTerminalError: `.status.response.statusCode >= 500`,
+				Mappings: []v1alpha2.Mapping{{
+					Method: "POST", Body: ".payload.body", URL: ".payload.baseUrl",
+					Polling: &common.Polling{
+						URL:   `"http://api/operations/456"`,
+						Done:  ".poll.response.body.done == true",
+						Error: ".poll.response.body.error",
+					},
+				}},
+			},
+		},
+	}
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	crCtx := service.NewRequestCRContext(cr)
+
+	if err := DeployAction(svcCtx, crCtx, "CREATE"); err != nil {
+		t.Fatalf("expected nil error (wire-200 poll failure must retry, not stall), got: %v", err)
+	}
+	// The real 200 is persisted — not a faked 5xx that would have made isTerminalError fire.
+	if cr.Status.Response.StatusCode != 200 {
+		t.Errorf("expected status.response.statusCode to be the real poll code 200, got %d", cr.Status.Response.StatusCode)
+	}
+	if cr.Status.TerminalError != "" {
+		t.Errorf("isTerminalError .status.response.statusCode >= 500 must NOT fire on a wire-200 poll failure (real code 200); got terminalError %q", cr.Status.TerminalError)
+	}
+	// Retry-by-default side effects: anchor cleared so a retry re-fires a fresh mutate.
+	if cr.Status.Polling.Response != nil {
+		t.Error("expected polling.response anchor CLEARED on retry-by-default")
 	}
 }
 
@@ -590,14 +652,14 @@ func TestDeployAction_AsyncCreate_OperationFailure_Terminal(t *testing.T) {
 	if cr.Status.Response.Body == "" {
 		t.Error("expected failing poll response surfaced to status.response on operation-failure terminal")
 	}
-	// Option 2: even on a terminal the write is shaped as a failed-mutate equivalent so that, once
-	// the operator clears the terminal, routing reads the resource as NOT created and re-fires CREATE
-	// rather than OBSERVE-ing an externalRef-keyed URL that never resolved.
-	if cr.Status.Response.StatusCode != pollFailureStatusCode {
-		t.Errorf("expected status.response.statusCode overridden to %d (failed-mutate shape), got %d", pollFailureStatusCode, cr.Status.Response.StatusCode)
+	// The REAL status code (a wire-200 for an LRO that completed with an error body) is persisted —
+	// no faked 5xx. Routing on the externalRef path consults .status.externalRef, never
+	// .status.response, so the write is inert to routing by construction.
+	if cr.Status.Response.StatusCode != 200 {
+		t.Errorf("expected status.response.statusCode to be the real poll code 200, got %d", cr.Status.Response.StatusCode)
 	}
 	if cr.Status.RequestDetails.Method != http.MethodPost {
-		t.Errorf("expected status.requestDetails.method stamped POST (failed-mutate shape), got %q", cr.Status.RequestDetails.Method)
+		t.Errorf("expected status.requestDetails.method stamped POST (inspection), got %q", cr.Status.RequestDetails.Method)
 	}
 }
 

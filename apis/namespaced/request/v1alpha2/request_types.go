@@ -42,6 +42,7 @@ const (
 
 // AsyncRequestParameters are the configurable fields of an AsyncRequest.
 // +kubebuilder:validation:XValidation:rule="!(self.insecureSkipTLSVerify == true && has(self.tlsConfig))",message="insecureSkipTLSVerify and tlsConfig are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!(self.mappings.exists(m, has(m.polling)) && self.mappings.exists(m, ((has(m.action) && m.action == 'OBSERVE') || (!has(m.action) && has(m.method) && m.method == 'GET')) && m.url.contains('.response') && !m.url.contains('.status.response') && !m.url.contains('.status.externalRef')))",message="polling is configured but the OBSERVE URL derives identity from the mutate response (.response); a polled resource must key its OBSERVE URL on .status.externalRef (set spec.externalRef to extract it) or use a constant URL"
 type AsyncRequestParameters struct {
 	// Mappings defines the HTTP mappings for different methods.
 	// Either Method or Action must be specified. If both are omitted, the mapping will not be used.

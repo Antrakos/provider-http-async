@@ -535,6 +535,14 @@ spec:
                 x-kubernetes-validations:
                 - message: insecureSkipTLSVerify and tlsConfig are mutually exclusive
                   rule: '!(self.insecureSkipTLSVerify == true && has(self.tlsConfig))'
+                - message: polling is configured but the OBSERVE URL derives identity
+                    from the mutate response (.response); a polled resource must key
+                    its OBSERVE URL on .status.externalRef (set spec.externalRef to
+                    extract it) or use a constant URL
+                  rule: '!(self.mappings.exists(m, has(m.polling)) && self.mappings.exists(m,
+                    ((has(m.action) && m.action == ''OBSERVE'') || (!has(m.action)
+                    && has(m.method) && m.method == ''GET'')) && m.url.contains(''.response'')
+                    && !m.url.contains(''.status.response'') && !m.url.contains(''.status.externalRef'')))'
               managementPolicies:
                 default:
                 - '*'

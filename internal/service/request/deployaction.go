@@ -225,6 +225,10 @@ func handlePollOperationFailure(
 
 	// Surface the failing poll response to status.response in both branches before classifying,
 	// so a terminal message and the full response coexist and an operator can inspect the failure.
+	// The REAL status code (a wire-200 for a completed-with-error LRO) is persisted: on the
+	// externalRef path routing consults .status.externalRef, never .status.response, so the write
+	// is inert to routing by construction — no faked statusCode/method is needed, and persisting
+	// the truth keeps isTerminalError's jq context honest (see docs/prd-explicit-identity-model.md).
 	if err := persistPollFailureResponse(svcCtx, crCtx, result.FailingPollResponse); err != nil {
 		return err
 	}
@@ -316,35 +320,28 @@ func classifyTerminalError(
 	}
 }
 
-// pollFailureStatusCode is the HTTP status persisted to status.response.statusCode on a poll
-// operation failure. It is a DELIBERATE OVERRIDE of the real transport status (a completed-with-
-// error LRO is typically HTTP 200 with an error block in the body). Base provider-http's routing
-// guard (isObjectValidForObservation) classifies a resource as "not created" only for a failed
-// POST — !(method == POST && IsHTTPError(statusCode)). A real 200 has IsHTTPError(200) == false,
-// so the guard would read the resource as created and misroute the retry to OBSERVE/Update instead
-// of re-firing CREATE (see docs/design-terminal-and-response-fields.md, "Existence-gate
-// interaction"). Persisting 500 (a server-side-failure status, semantically truer than the
-// transport 200 that merely wrapped an error) makes IsHTTPError true so the existing base guard
-// fires — no routing code changes. The real error body is preserved in status.response.body, and
-// the true 200 is still what isTerminalError/polling.error saw in the poll loop's jq context
-// (evaluated before this write). Option 3 (docs/prd-explicit-identity-model.md) removes the lie.
-const pollFailureStatusCode = 500
-
-// persistPollFailureResponse surfaces the failing poll response to status.response, the same field
-// a failed mutate lands in for base provider-http, so an operator can inspect the full failure
-// (statusCode / headers / body) and so base's routing guard treats it as a failed mutate.
+// persistPollFailureResponse surfaces the failing poll response to status.response so an operator
+// can inspect the full failure (statusCode / headers / body). The REAL status code is persisted — a
+// completed-with-error LRO is typically HTTP 200 with an error block in the body, and that 200 is
+// what is stored, not a faked 5xx.
 //
-// It is shaped as a failed-mutate equivalent — statusCode = pollFailureStatusCode (500, overriding
-// the real 200) and requestDetails.method = POST — because a poll operation failure IS the outcome
-// of the CREATE that started the operation. Both fields are required to trip base's
-// !(method == POST && IsHTTPError(statusCode)) guard; either alone leaves the resource reading as
-// "created" and misroutes the retry.
+// No faked statusCode/method is needed because routing does not consult this write on the
+// externalRef path: IsUpToDate routes on .status.externalRef (and the in-flight anchor), never on
+// .status.response, so the stored response is inert to routing by construction (see
+// docs/prd-explicit-identity-model.md). Persisting the truth — rather than overriding statusCode to
+// 500 to trip base's !(POST && IsHTTPError) guard — also keeps isTerminalError's jq context honest:
+// the live status is read by GetStatusMap after this write, so a faked 500 would have poisoned an
+// expression like `isTerminalError: .status.response.statusCode >= 500` into classifying every
+// wire-200-with-error-body poll failure as terminal.
 //
-// The write goes DIRECTLY via the StatusWriter, deliberately NOT through statushandler: with
-// statusCode = 500 the shared handler would take its error branch (incrementFailures) and pollute
-// .status.failed, but a poll GET is a read and must not count toward the consecutive-mutate-failure
-// counter. Writing directly leaves the counter untouched. RetryOnConflict handles optimistic-lock
-// conflicts.
+// requestDetails.method is stamped POST because this entry records the CREATE operation's failure
+// outcome (the poll confirmed the create never produced a resource), not a standalone GET. It is
+// inspection-only: routing does not read it on the externalRef path.
+//
+// The write goes DIRECTLY via the StatusWriter, deliberately NOT through statushandler: the shared
+// handler would take its error branch (incrementFailures) and pollute .status.failed, but a poll GET
+// is a read and must not count toward the consecutive-mutate-failure counter. Writing directly leaves
+// the counter untouched. RetryOnConflict handles optimistic-lock conflicts.
 func persistPollFailureResponse(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext, failingResponse *httpClient.HttpResponse) error {
 	resource := crCtx.GetCR()
 	nn := types.NamespacedName{Name: resource.GetName(), Namespace: resource.GetNamespace()}
@@ -353,12 +350,11 @@ func persistPollFailureResponse(svcCtx *service.ServiceContext, crCtx *service.R
 			return errors.Wrap(err, "failed to get resource before persisting poll failure response")
 		}
 		sw := crCtx.StatusWriter()
-		// Keep the real error body/headers for operator inspection; override only the statusCode
-		// (see pollFailureStatusCode) and stamp the method as POST so base's guard recognizes the
-		// failed mutate.
+		// Persist the real error body/headers/statusCode for operator inspection. statusCode is the
+		// true transport code (commonly 200 for an LRO that completed with an error block in the body).
 		sw.SetBody(failingResponse.Body)
 		sw.SetHeaders(failingResponse.Headers)
-		sw.SetStatusCode(pollFailureStatusCode)
+		sw.SetStatusCode(failingResponse.StatusCode)
 		sw.SetRequestDetails("", http.MethodPost, "", nil)
 		return svcCtx.LocalKube.Status().Update(svcCtx.Ctx, resource)
 	})

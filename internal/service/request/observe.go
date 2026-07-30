@@ -9,6 +9,7 @@ import (
 	"k8s.io/client-go/util/retry"
 
 	"github.com/Antrakos/provider-http-async/apis/common"
+	"github.com/Antrakos/provider-http-async/apis/interfaces"
 	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
 	datapatcher "github.com/Antrakos/provider-http-async/internal/data-patcher"
 	"github.com/Antrakos/provider-http-async/internal/service"
@@ -31,6 +32,16 @@ const (
 	// state. Surfacing it as a terminal error makes both conditions honest:
 	// Ready=False (Terminal error: ...) and Synced=False (reconcile error).
 	errUpdateMappingNotFound = "no UPDATE or PUT mapping is configured but the resource is out of sync (expectedResponseCheck returned false); add an UPDATE mapping or fix the spec so the resource reconciles"
+
+	// errPolledResponseIdentity rejects the one shape the two-model identity split cannot
+	// support: a polled resource whose OBSERVE URL derives identity from the mutate .response
+	// body rather than .status.externalRef. A polled resource has no stable .response identity
+	// across the poll — the polling flow never writes the mutate response to status.response
+	// (only a poll failure does, and then it holds the error body), so a response-keyed OBSERVE
+	// URL cannot resolve and the resource stalls. externalRef exists precisely for this. A
+	// constant OBSERVE URL + polling stays legal (it self-corrects via a 404 → Create); an
+	// externalRef-keyed URL is the identity path. See docs/prd-explicit-identity-model.md.
+	errPolledResponseIdentity = "polling is configured but the OBSERVE URL derives identity from the mutate response (.response); a polled resource must key its OBSERVE URL on .status.externalRef (set spec.externalRef to extract it) or use a constant URL"
 )
 
 type ObserveRequestDetails struct {
@@ -140,29 +151,113 @@ func IsUpToDate(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext)
 		return FailedObserve(), err
 	}
 
-	objectNotCreated := !isObjectValidForObservation(crCtx)
+	// Reject the one shape the identity split cannot support: a polled resource whose OBSERVE URL
+	// derives identity from the mutate .response body (not .status.externalRef). Such a resource
+	// has no stable .response identity across the poll, so its OBSERVE URL cannot resolve — it
+	// would stall. This is enforced at admission via CEL too; the runtime guard is defense in
+	// depth (and covers specs applied before the CRD's validation landed). Surfaced as a terminal
+	// error: a config mistake a requeue cannot fix, cleared on a spec change like any other
+	// terminal (see docs/prd-explicit-identity-model.md).
+	if pollingConfigured(spec) && urlReferencesResponse(mapping.GetURL()) && !urlReferencesExternalRef(mapping.GetURL()) {
+		if persistErr := polling.SetTerminalFailure(svcCtx, crCtx, errPolledResponseIdentity, false); persistErr != nil {
+			return FailedObserve(), persistErr
+		}
+		return NewTerminalObserve(errPolledResponseIdentity), nil
+	}
 
-	// Identity gate: an OBSERVE URL built as baseUrl + "/" + .status.externalRef is
-	// meaningless while externalRef has never been set. With no identity ever established
-	// (no prior response, no anchor) such a URL collapses onto the resource's *collection*
-	// endpoint (e.g. .../models/), which a well-behaved API answers with 200 + a list body.
-	// That 200 is indistinguishable from "the resource exists" using the HTTP status alone, so
-	// the reconciler reads it as "exists but drifted" and routes to Update() — never Create().
-	// The correct "resource does not exist" signal before any identity is established is the
-	// absence of externalRef itself: report ErrObjectNotFound so the controller calls Create().
-	//
-	// This runs after the in-flight anchor gate above (which handles its own empty-externalRef
-	// case for the CREATE+poll resume) and after the OBSERVE mapping is resolved, so a missing
-	// OBSERVE mapping still surfaces its own error, and so the gate can check whether the URL
-	// actually depends on externalRef. It applies only when the URL template references
-	// .status.externalRef: a constant URL (or one keyed by .response.body.id) does not collapse
-	// when externalRef is empty, so OBSERVE must run and answer on its own merits. It is gated
-	// on objectNotCreated so a resource that already has a prior response / externalRef (an
-	// established identity, or an import) still observes normally — only a never-identified
-	// resource routes to Create() here. No HTTP call is made against the malformed URL.
-	if objectNotCreated && status.GetExternalRefValue() == "" && urlReferencesExternalRef(mapping.GetURL()) {
+	// Identity is split into two models so writing status.response (success, failure, poll
+	// error) is inert to routing on the externalRef path (see docs/prd-explicit-identity-model.md).
+	// The discriminator is whether the OBSERVE URL depends on .status.externalRef — a static
+	// property of the mapping, computable before any identity is established. It is NOT the
+	// spec.externalRef expression (an import seeded from external-name carries no expression yet
+	// is externalRef-driven) nor the status.externalRef value (empty before CREATE completes).
+	if urlReferencesExternalRef(mapping.GetURL()) {
+		return observeExternalRefDriven(svcCtx, crCtx, mapping)
+	}
+	return observeResponseDriven(svcCtx, crCtx, mapping)
+}
+
+// observeExternalRefDriven handles resources whose OBSERVE URL references .status.externalRef.
+// Identity is .status.externalRef (established) or the in-flight anchor (handled above); routing
+// consults those directly and NEVER consults .status.response. Writing any response to
+// .status.response is inert to routing by construction, so the poll-failure write persists the
+// real status code without faking a 5xx (see persistPollFailureResponse).
+func observeExternalRefDriven(
+	svcCtx *service.ServiceContext,
+	crCtx *service.RequestCRContext,
+	mapping interfaces.HTTPMapping,
+) (ObserveRequestDetails, error) {
+	status := crCtx.Status()
+	spec := crCtx.Spec()
+
+	// Identity gate, unguarded by objectNotCreated: an OBSERVE URL built as
+	// baseUrl + "/" + .status.externalRef is meaningless while externalRef has never been set.
+	// Such a URL collapses onto the resource's *collection* endpoint (e.g. .../models/), which a
+	// well-behaved API answers with 200 + a list body, indistinguishable from "the resource
+	// exists" using the HTTP status alone — the reconciler would read it as "exists but drifted"
+	// and route to Update(), never Create(). The correct "does not exist" signal before any
+	// identity is established is the absence of externalRef itself, regardless of .status.response
+	// (a poll-failure write carries the real 200 but must not route to OBSERVE). No HTTP call is
+	// made against the malformed URL. An established identity (externalRef set, e.g. after
+	// CREATE+poll completed or an import) falls through to OBSERVE.
+	if status.GetExternalRefValue() == "" {
 		return FailedObserve(), errors.New(observe.ErrObjectNotFound)
 	}
+
+	// Evaluate the HTTP request template. A templating failure here is a config error, not a
+	// "does not exist" signal — the identity gate above already decided existence, so do not
+	// collapse it into ErrObjectNotFound (that base fallback belongs on the response path).
+	requestDetails, err := requestgen.GenerateValidRequestDetails(svcCtx, crCtx, mapping)
+	if err != nil {
+		return FailedObserve(), err
+	}
+
+	details, responseErr := svcCtx.HTTP.SendRequest(svcCtx.Ctx, requestmapping.GetEffectiveMethod(mapping), requestDetails.Url, requestDetails.Body, requestDetails.Headers, svcCtx.TLSConfigData)
+	// A non-2xx against an established identity (e.g. 404) means the resource no longer exists →
+	// Create. isObjectValidForObservation is NOT consulted: identity was decided by externalRef.
+	// A non-2xx listed in spec.allowedStatusCodes is not an error, so it does NOT route to Create:
+	// the resource exists and its OBSERVE answer is taken at face value (falls through to drift).
+	if !utils.IsHTTPSuccess(details.HttpResponse.StatusCode) && utils.IsHTTPError(details.HttpResponse.StatusCode, spec.GetAllowedStatusCodes()) {
+		return FailedObserve(), errors.New(observe.ErrObjectNotFound)
+	}
+	if err := determineIfRemoved(svcCtx, crCtx, details, responseErr); err != nil {
+		return FailedObserve(), err
+	}
+
+	// resourceExistsCheck (optional): decouples existence from drift for sub-resources embedded in
+	// a parent OBSERVE response that always returns 2xx. A false result means the owned
+	// sub-resource is absent → CREATE. This is an explicit gate slot on the externalRef path
+	// (e.g. Vertex deployedModel); evaluated after the identity gate and before drift detection.
+	if existsChecker := observe.GetResourceExistsResponseCheck(spec); existsChecker != nil {
+		exists, err := existsChecker.Check(svcCtx, crCtx, details, responseErr)
+		if err != nil {
+			return FailedObserve(), err
+		}
+		if !exists {
+			return FailedObserve(), errors.New(observe.ErrObjectNotFound)
+		}
+	}
+
+	secretConfigs := spec.GetSecretInjectionConfigs()
+	datapatcher.ApplyResponseDataToSecrets(svcCtx.Ctx, svcCtx.LocalKube, svcCtx.Logger, &details.HttpResponse, secretConfigs, crCtx.GetCR())
+	return determineIfUpToDate(svcCtx, crCtx, details, responseErr)
+}
+
+// observeResponseDriven handles resources whose OBSERVE URL does NOT reference
+// .status.externalRef — exactly base provider-http. status.response is the identity signal:
+// isObjectValidForObservation (a stored response that is not a failed POST) is the created-signal.
+// No identity gate, no anchor. No externalRef identity is reachable (the URL does not use it).
+func observeResponseDriven(
+	svcCtx *service.ServiceContext,
+	crCtx *service.RequestCRContext,
+	mapping interfaces.HTTPMapping,
+) (ObserveRequestDetails, error) {
+	spec := crCtx.Spec()
+
+	// A resource is "already created" if a prior response was stored that is not a failed POST.
+	// On this path status.response IS the identity signal, so a poll-failure-shaped write (which
+	// lives on the externalRef path) never reaches here.
+	objectNotCreated := !isObjectValidForObservation(crCtx)
 
 	// Evaluate the HTTP request template. If successfully templated, attempt to
 	// observe the resource.
@@ -189,13 +284,9 @@ func IsUpToDate(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext)
 		return FailedObserve(), err
 	}
 
-	// resourceExistsCheck (optional): decouples existence from drift for sub-resources
-	// embedded in a parent OBSERVE response that always returns 2xx. When configured,
-	// evaluate it against the OBSERVE response before drift detection. A false result
-	// means the owned sub-resource is absent → CREATE (same signal the controller maps to
-	// ResourceExists:false). A true result falls through to expectedResponseCheck (drift).
-	// This is evaluated inside the OBSERVE path, after the in-flight anchor gate above, so
-	// it never races an in-flight operation (which returns earlier).
+	// resourceExistsCheck (optional): decouples existence from drift for sub-resources embedded in
+	// a parent OBSERVE response that always returns 2xx. Kept here for parity with the
+	// externalRef path; a false result means the sub-resource is absent → CREATE.
 	if existsChecker := observe.GetResourceExistsResponseCheck(spec); existsChecker != nil {
 		exists, err := existsChecker.Check(svcCtx, crCtx, details, responseErr)
 		if err != nil {
@@ -310,4 +401,24 @@ func isObjectValidForObservation(crCtx *service.RequestCRContext) bool {
 // .response.body.id, does not collapse and must be allowed to OBSERVE on its own merits.
 func urlReferencesExternalRef(urlTemplate string) bool {
 	return strings.Contains(urlTemplate, ".status.externalRef")
+}
+
+// urlReferencesResponse reports whether the OBSERVE URL jq template derives identity from the
+// mutate response body (.response...). It deliberately excludes .status.response — that is the
+// stored status field, not the live mutate-response jq root — so only a genuine response-keyed
+// identity (e.g. .response.body.id) trips the polled-response-identity guard.
+func urlReferencesResponse(urlTemplate string) bool {
+	return strings.Contains(urlTemplate, ".response") && !strings.Contains(urlTemplate, ".status.response")
+}
+
+// pollingConfigured reports whether any mapping in the spec declares polling. A polled resource
+// cannot key its OBSERVE URL on the mutate .response (no stable response identity across the
+// poll), so the combination is rejected — see errPolledResponseIdentity.
+func pollingConfigured(spec interfaces.MappedHTTPRequestSpec) bool {
+	for _, m := range spec.GetMappings() {
+		if m.GetPolling() != nil {
+			return true
+		}
+	}
+	return false
 }

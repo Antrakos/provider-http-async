@@ -445,19 +445,19 @@ func Test_isUpToDate(t *testing.T) {
 				err: errNotFound,
 			},
 		},
-		// Option 2 regression: after a poll failure, persistPollFailureResponse writes status.response
-		// SHAPED as a failed-mutate equivalent (statusCode=500, method=POST) precisely so this
-		// populated response stays transparent to routing. isObjectValidForObservation reads
-		// !(POST && IsHTTPError(500)) == false, so objectNotCreated is true and the identity gate
-		// still routes an empty-externalRef, externalRef-keyed resource to Create() — exactly as if
-		// status.response were empty. Without the shaping (e.g. a real 200) the stored response would
-		// read as "created" and the resource would wrongly route to OBSERVE/Update, re-breaking the
-		// gate that 18d0222 added. No OBSERVE HTTP call is made.
-		"PollFailureShapedResponse_EmptyExternalRef_RoutesToCreate_NoHTTPCall": {
+		// Explicit identity model: after a poll failure, persistPollFailureResponse writes the REAL
+		// poll response to status.response (statusCode=200, method=POST for inspection) — no faked
+		// 5xx. Because the OBSERVE URL references .status.externalRef, routing is on the externalRef
+		// path, which consults .status.externalRef (empty here) and NEVER .status.response. So a
+		// populated 200 response does NOT route the resource to OBSERVE/Update — the identity gate
+		// still routes an empty-externalRef, externalRef-keyed resource to Create() regardless of the
+		// stored response. No OBSERVE HTTP call is made. (Previously this needed the 500 lie to make
+		// base's !(POST && IsHTTPError) guard fire; the path split makes the write routing-inert.)
+		"PollFailureRealResponse_EmptyExternalRef_RoutesToCreate_NoHTTPCall": {
 			args: args{
 				http: &MockHttpClient{
 					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
-						t.Errorf("OBSERVE must not fire after a poll-failure shaped write with empty externalRef; got %s %s", method, url)
+						t.Errorf("OBSERVE must not fire after a poll-failure write with empty externalRef; got %s %s", method, url)
 						return httpClient.HttpDetails{}, nil
 					},
 				},
@@ -465,11 +465,11 @@ func Test_isUpToDate(t *testing.T) {
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
 				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
-					// The poll-failure shaped write: real error body, but statusCode/method faked to
-					// the failed-mutate shape so routing reads the resource as NOT created.
+					// The poll-failure write: the real poll response persisted as-is (wire-200 with an
+					// error body). Routing must ignore this and key off the empty externalRef.
 					r.Status.Response = v1alpha2.Response{
 						Body:       `{"done": true, "error": {"message": "quota exceeded"}}`,
-						StatusCode: http.StatusInternalServerError,
+						StatusCode: http.StatusOK,
 					}
 					r.Status.RequestDetails = v1alpha2.Mapping{Method: http.MethodPost}
 					r.Status.ExternalRef = ""
@@ -554,6 +554,8 @@ func Test_isUpToDate(t *testing.T) {
 		// resourceExistsCheck=false on a parent that always returns 200: the owned sub-resource is
 		// absent, so IsUpToDate reports ErrObjectNotFound -> the controller calls Create(). This is
 		// the Vertex deployedModel fix (bug-observe-always-fires-blocks-create-for-subresources.md).
+		// The OBSERVE URL references .status.externalRef, so this exercises resourceExistsCheck on
+		// the externalRef path (the path the PRD assigns the gate to).
 		"ResourceExistsCheckFalse_RoutesToCreate": {
 			args: args{
 				http: &MockHttpClient{
@@ -573,7 +575,7 @@ func Test_isUpToDate(t *testing.T) {
 					r.Status.Response.StatusCode = 200 // object already observed before
 					r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
 						{Method: "POST", Action: "CREATE", URL: ".payload.baseUrl", Body: ".payload.body"},
-						{Method: "GET", Action: "OBSERVE", URL: ".payload.baseUrl"},
+						{Method: "GET", Action: "OBSERVE", URL: `.payload.baseUrl + "/endpoints/" + .status.externalRef`},
 					}
 					r.Spec.ForProvider.ResourceExistsCheck = v1alpha2.ExpectedResponseCheck{
 						Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
@@ -591,6 +593,8 @@ func Test_isUpToDate(t *testing.T) {
 		},
 		// resourceExistsCheck=true (sub-resource present) then expectedResponseCheck=false (drift),
 		// with an UPDATE mapping present: normal drift -> Synced=false (NOT a terminal error).
+		// The OBSERVE URL references .status.externalRef, so this exercises the externalRef path's
+		// drift detection after the exists gate (the PRD's "drift -> Update" case on that path).
 		"ResourceExistsCheckTrue_ThenDrift_WithUpdateMapping": {
 			args: args{
 				http: &MockHttpClient{
@@ -609,8 +613,8 @@ func Test_isUpToDate(t *testing.T) {
 					r.Status.Response.StatusCode = 200
 					r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
 						{Method: "POST", Action: "CREATE", URL: ".payload.baseUrl", Body: ".payload.body"},
-						{Method: "GET", Action: "OBSERVE", URL: ".payload.baseUrl"},
-						{Method: "PUT", Action: "UPDATE", URL: ".payload.baseUrl", Body: ".payload.body"},
+						{Method: "GET", Action: "OBSERVE", URL: `.payload.baseUrl + "/endpoints/" + .status.externalRef`},
+						{Method: "PUT", Action: "UPDATE", URL: `.payload.baseUrl + "/endpoints/" + .status.externalRef`, Body: ".payload.body"},
 					}
 					r.Spec.ForProvider.ResourceExistsCheck = v1alpha2.ExpectedResponseCheck{
 						Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
@@ -1052,6 +1056,30 @@ func Test_urlReferencesExternalRef(t *testing.T) {
 	}
 }
 
+func Test_urlReferencesResponse(t *testing.T) {
+	cases := map[string]struct {
+		url  string
+		want bool
+	}{
+		"KeyedOnResponseBodyId":  {`(.payload.baseUrl + "/" + .response.body.id)`, true},
+		"ReferencesResponseOnly": {`.response.body.name`, true},
+		"ConstantURL":            {`("http://some.org/" + "1423")`, false},
+		"ExternalRefOnly":        {`.status.externalRef`, false},
+		"Empty":                  {"", false},
+		// .status.response is the stored status field, not the live mutate-response root —
+		// it must NOT count as a response-keyed identity (else it would falsely trip the guard).
+		"StatusResponseNotCounted": {`.payload.baseUrl + "/" + .status.response.body.id`, false},
+	}
+	for name, tc := range cases {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			if got := urlReferencesResponse(tc.url); got != tc.want {
+				t.Errorf("urlReferencesResponse(%q) = %v, want %v", tc.url, got, tc.want)
+			}
+		})
+	}
+}
+
 func Test_requestDetails(t *testing.T) {
 	type args struct {
 		ctx    context.Context
@@ -1267,5 +1295,268 @@ func TestIsUpToDate_TerminalClear_ResetsStartedAt(t *testing.T) {
 	}
 	if cr.Status.Polling.StartedAt != nil {
 		t.Errorf("expected StartedAt reset to nil for a fresh timeout budget, got %v", cr.Status.Polling.StartedAt)
+	}
+}
+
+// TestIsUpToDate_Import_SeededExternalRef_ObserveRuns_NoCreate verifies the PRD's import case
+// (Gap 1): a resource imported via crossplane.io/external-name has status.externalRef seeded by
+// the controller with NO spec.externalRef expression. Because the OBSERVE URL references
+// .status.externalRef, routing is on the externalRef path; the identity gate keys off the VALUE
+// (seeded), not the expression, so OBSERVE runs against the real URL and Create is never called.
+func TestIsUpToDate_Import_SeededExternalRef_ObserveRuns_NoCreate(t *testing.T) {
+	observeCalled := false
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			observeCalled = true
+			// The imported resource exists at its real URL: baseUrl + "/models/" + externalRef.
+			if !strings.HasSuffix(url, "/models/789") {
+				t.Errorf("expected OBSERVE against the imported resource URL .../models/789, got %s", url)
+			}
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+				StatusCode: 200,
+				Body:       `{"name":"models/789","displayName":"imported-model"}`,
+			}}, nil
+		},
+	}
+	// Import shape: status.externalRef seeded from external-name; NO spec.externalRef expression.
+	// The OBSERVE URL references .status.externalRef → externalRef-driven path.
+	cr := httpRequest(func(r *v1alpha2.AsyncRequest) {
+		r.Status.ExternalRef = "789"
+		r.Spec.ForProvider.Payload.BaseUrl = "https://aiplatform.googleapis.com/v1beta1/projects/p/locations/us-central1"
+		// Deliberately no ExternalRef expression — this is the import.
+		r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+			{Method: "POST", Action: "CREATE", URL: `.payload.baseUrl + "/models:upload"`, Body: ".payload.body"},
+			{Method: "GET", Action: "OBSERVE", URL: `.payload.baseUrl + "/models/" + .status.externalRef`},
+		}
+		r.Spec.ForProvider.ExpectedResponseCheck = v1alpha2.ExpectedResponseCheck{
+			Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
+			Logic: `.response.body.displayName == "imported-model"`,
+		}
+	})
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	got, err := IsUpToDate(svcCtx, service.NewRequestCRContext(cr))
+	if err != nil {
+		t.Fatalf("expected no error (imported resource observes, not Create): %v", err)
+	}
+	if !observeCalled {
+		t.Error("expected OBSERVE to fire against the imported resource's real URL")
+	}
+	if !got.Synced {
+		t.Error("expected Synced=true for an imported resource that matches its spec")
+	}
+}
+
+// TestIsUpToDate_ResponseDriven_BaseParity verifies the response-driven path: an OBSERVE URL that
+// does NOT reference .status.externalRef routes exactly like base provider-http. status.response is
+// the identity signal; there is no identity gate, no anchor. A failed CREATE (POST 500 stored) reads
+// as not-created → ErrObjectNotFound (Create); a successful CREATE (stored response) → Observe runs.
+func TestIsUpToDate_ResponseDriven_BaseParity(t *testing.T) {
+	// Mappings keyed on .response.body.id, NOT .status.externalRef → response-driven path.
+	mappings := []v1alpha2.Mapping{
+		{Method: "POST", Action: "CREATE", URL: ".payload.baseUrl", Body: ".payload.body"},
+		{Method: "GET", Action: "OBSERVE", URL: `(.payload.baseUrl + "/" + .response.body.id)`},
+		{Method: "PUT", Action: "UPDATE", URL: `(.payload.baseUrl + "/" + .response.body.id)`},
+	}
+	base := func(mod func(*v1alpha2.AsyncRequest)) *v1alpha2.AsyncRequest {
+		return httpRequest(func(r *v1alpha2.AsyncRequest) {
+			r.Spec.ForProvider.Payload.BaseUrl = "https://api.example.com/users"
+			r.Spec.ForProvider.Mappings = mappings
+			r.Spec.ForProvider.ExpectedResponseCheck = v1alpha2.ExpectedResponseCheck{
+				Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
+				Logic: `.response.body.username == "john_doe"`,
+			}
+			mod(r)
+		})
+	}
+
+	t.Run("FailedCreate_StoredPost500_Non2xxObserve_RoutesToCreate", func(t *testing.T) {
+		// A prior failed CREATE (POST 500) stored: isObjectValidForObservation reads
+		// !(POST && IsHTTPError(500)) == false → objectNotCreated is true. On the response-driven
+		// path OBSERVE still fires (base behavior — the gate is on the response, not the pre-flight),
+		// and a non-2xx OBSERVE result with objectNotCreated routes to ErrObjectNotFound (Create).
+		// No identity gate is reachable on this path; status.response is the sole created-signal.
+		cr := base(func(r *v1alpha2.AsyncRequest) {
+			r.Status.RequestDetails.Method = http.MethodPost
+			r.Status.Response.StatusCode = 500
+		})
+		observeCalled := false
+		svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
+			MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				observeCalled = true
+				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: http.StatusNotFound}}, nil
+			},
+		}, nil)
+		_, err := IsUpToDate(svcCtx, service.NewRequestCRContext(cr))
+		if !observeCalled {
+			t.Error("expected OBSERVE to fire on the response-driven path (base behavior)")
+		}
+		if err == nil || err.Error() != observe.ErrObjectNotFound {
+			t.Fatalf("expected ErrObjectNotFound (Create) for a non-2xx OBSERVE with objectNotCreated, got %v", err)
+		}
+	})
+
+	t.Run("SuccessfulCreate_StoredResponse_ObserveRuns", func(t *testing.T) {
+		// A prior successful CREATE (201) stored → isObjectValidForObservation is true → OBSERVE
+		// fires and reports up-to-date against the real URL.
+		cr := base(func(r *v1alpha2.AsyncRequest) {
+			r.Status.RequestDetails.Method = http.MethodPost
+			r.Status.Response.StatusCode = 201
+			r.Status.Response.Body = `{"id": "123", "username": "john_doe"}`
+		})
+		observeCalled := false
+		svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
+			MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				observeCalled = true
+				if !strings.HasSuffix(url, "/users/123") {
+					t.Errorf("expected OBSERVE against .../users/123, got %s", url)
+				}
+				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+					StatusCode: 200, Body: `{"id":"123","username":"john_doe"}`,
+				}}, nil
+			},
+		}, nil)
+		got, err := IsUpToDate(svcCtx, service.NewRequestCRContext(cr))
+		if err != nil {
+			t.Fatalf("expected no error (established resource observes), got %v", err)
+		}
+		if !observeCalled {
+			t.Error("expected OBSERVE to fire for a stored successful CREATE")
+		}
+		if !got.Synced {
+			t.Error("expected Synced=true when the observed resource matches")
+		}
+	})
+}
+
+// TestIsUpToDate_ExternalRef_AllowedStatusCode_DoesNotRouteToCreate verifies Gap 3: on the
+// externalRef path, a non-2xx OBSERVE status listed in spec.allowedStatusCodes is NOT an error, so
+// the resource is treated as existing (falls through to drift) rather than routed to Create.
+func TestIsUpToDate_ExternalRef_AllowedStatusCode_DoesNotRouteToCreate(t *testing.T) {
+	observeCalled := false
+	cr := httpRequest(func(r *v1alpha2.AsyncRequest) {
+		r.Status.ExternalRef = "789"
+		r.Spec.ForProvider.Payload.BaseUrl = "https://api.example.com"
+		r.Spec.ForProvider.AllowedStatusCodes = []int{418}
+		r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+			{Method: "POST", Action: "CREATE", URL: `.payload.baseUrl + "/models:upload"`, Body: ".payload.body"},
+			{Method: "GET", Action: "OBSERVE", URL: `.payload.baseUrl + "/models/" + .status.externalRef`},
+		}
+		r.Spec.ForProvider.ExpectedResponseCheck = v1alpha2.ExpectedResponseCheck{
+			Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
+			Logic: `.response.body.ok == true`,
+		}
+	})
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			observeCalled = true
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: 418, Body: `{"ok": true}`}}, nil
+		},
+	}, nil)
+	got, err := IsUpToDate(svcCtx, service.NewRequestCRContext(cr))
+	if err != nil {
+		t.Fatalf("an allow-listed non-2xx must NOT route to Create on the externalRef path, got err: %v", err)
+	}
+	if !observeCalled {
+		t.Error("expected OBSERVE to fire on the externalRef path")
+	}
+	if !got.Synced {
+		t.Error("expected Synced=true: the allow-listed 418 response matches expectedResponseCheck")
+	}
+}
+
+// TestIsUpToDate_PolledResponseIdentity_Rejected verifies the guard that closes the one shape the
+// two-model identity split cannot support: polling configured + an OBSERVE URL keyed on the mutate
+// .response body (not .status.externalRef). A polled resource has no stable .response identity
+// across the poll, so the URL cannot resolve — it must be rejected as a terminal config error
+// rather than stall silently. CEL rejects this at admission; this covers the runtime guard.
+func TestIsUpToDate_PolledResponseIdentity_Rejected(t *testing.T) {
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			t.Errorf("no HTTP call must be made for a rejected polled-response-identity spec; got %s %s", method, url)
+			return httpClient.HttpDetails{}, nil
+		},
+	}
+	// CREATE declares polling; OBSERVE keys identity on .response.body.id — the rejected shape.
+	cr := httpRequest(func(r *v1alpha2.AsyncRequest) {
+		r.Spec.ForProvider.Payload.BaseUrl = "https://api.example.com/models"
+		r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+			{Method: "POST", Action: "CREATE", URL: `.payload.baseUrl + "/models:upload"`, Body: ".payload.body",
+				Polling: &common.Polling{URL: ".response.body.name", Done: ".poll.response.body.done == true"}},
+			{Method: "GET", Action: "OBSERVE", URL: `.payload.baseUrl + "/" + .response.body.id`},
+		}
+	})
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	got, err := IsUpToDate(svcCtx, service.NewRequestCRContext(cr))
+	if err != nil {
+		t.Fatalf("expected the guard to surface a terminal observation (not a Go error), got err: %v", err)
+	}
+	if got.TerminalError != errPolledResponseIdentity {
+		t.Errorf("expected terminal error %q, got %q", errPolledResponseIdentity, got.TerminalError)
+	}
+	if cr.Status.TerminalError != errPolledResponseIdentity {
+		t.Errorf("expected the terminal to be persisted to status.terminalError, got %q", cr.Status.TerminalError)
+	}
+}
+
+// TestIsUpToDate_PolledExternalRefIdentity_NotRejected is the negative control: polling + an
+// OBSERVE URL keyed on .status.externalRef is the blessed identity path and must NOT be rejected.
+func TestIsUpToDate_PolledExternalRefIdentity_NotRejected(t *testing.T) {
+	cr := httpRequest(func(r *v1alpha2.AsyncRequest) {
+		r.Status.ExternalRef = "" // fresh: identity gate routes to Create, but NOT via the guard
+		r.Spec.ForProvider.Payload.BaseUrl = "https://api.example.com/models"
+		r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+			{Method: "POST", Action: "CREATE", URL: `.payload.baseUrl + "/models:upload"`, Body: ".payload.body",
+				Polling: &common.Polling{URL: ".response.body.name", Done: ".poll.response.body.done == true"}},
+			{Method: "GET", Action: "OBSERVE", URL: `.payload.baseUrl + "/models/" + .status.externalRef`},
+		}
+	})
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			t.Errorf("empty externalRef must route to Create via the identity gate, not fire OBSERVE; got %s %s", method, url)
+			return httpClient.HttpDetails{}, nil
+		},
+	}, nil)
+	got, err := IsUpToDate(svcCtx, service.NewRequestCRContext(cr))
+	// The identity gate (not the guard) routes an empty externalRef to Create.
+	if err == nil || err.Error() != observe.ErrObjectNotFound {
+		t.Fatalf("expected ErrObjectNotFound from the identity gate, got %v", err)
+	}
+	if got.TerminalError != "" {
+		t.Errorf("polled + externalRef-keyed OBSERVE must NOT be rejected as terminal, got %q", got.TerminalError)
+	}
+}
+
+// TestIsUpToDate_PolledConstantURL_NotRejected is a negative control: polling + a constant OBSERVE
+// URL (no .response, no .status.externalRef) is legal — it self-corrects via a 404 → Create.
+func TestIsUpToDate_PolledConstantURL_NotRejected(t *testing.T) {
+	observeCalled := false
+	cr := httpRequest(func(r *v1alpha2.AsyncRequest) {
+		r.Status.Response.StatusCode = 200 // established via a prior response (response-driven path)
+		r.Spec.ForProvider.Payload.BaseUrl = "https://api.example.com/singleton"
+		r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+			{Method: "POST", Action: "CREATE", URL: ".payload.baseUrl", Body: ".payload.body",
+				Polling: &common.Polling{URL: ".response.body.name", Done: ".poll.response.body.done == true"}},
+			{Method: "GET", Action: "OBSERVE", URL: ".payload.baseUrl"},
+		}
+		r.Spec.ForProvider.ExpectedResponseCheck = v1alpha2.ExpectedResponseCheck{
+			Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
+			Logic: `.response.body.ready == true`,
+		}
+	})
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			observeCalled = true
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: 200, Body: `{"ready": true}`}}, nil
+		},
+	}, nil)
+	got, err := IsUpToDate(svcCtx, service.NewRequestCRContext(cr))
+	if err != nil {
+		t.Fatalf("polled + constant OBSERVE URL must be legal, got err: %v", err)
+	}
+	if got.TerminalError != "" {
+		t.Errorf("polled + constant OBSERVE URL must NOT be rejected, got %q", got.TerminalError)
+	}
+	if !observeCalled {
+		t.Error("expected OBSERVE to fire for a polled constant-URL resource")
 	}
 }
