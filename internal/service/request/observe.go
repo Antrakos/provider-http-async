@@ -244,9 +244,11 @@ func determineIfUpToDate(svcCtx *service.ServiceContext, crCtx *service.RequestC
 	// clearTerminalError, and re-evaluates — the same recovery path as a poll terminal.
 	if !result {
 		if _, mapErr := requestmapping.GetMapping(crCtx.Spec(), common.ActionUpdate, svcCtx.Logger); mapErr != nil {
-			// Configuration terminal (no UPDATE mapping), not a polling.error result: no
-			// structured response value to retain, so pass nil — terminalError carries it.
-			if persistErr := polling.SetTerminalFailure(svcCtx, crCtx, errUpdateMappingNotFound, nil); persistErr != nil {
+			// Configuration terminal (no UPDATE mapping), not a polling.error result: there is
+			// no in-flight operation, so there is no anchor to clear (clearAnchor=false is a no-op
+			// on the anchor). terminalError carries the message; the full response is already in
+			// status.response from the OBSERVE call.
+			if persistErr := polling.SetTerminalFailure(svcCtx, crCtx, errUpdateMappingNotFound, false); persistErr != nil {
 				return FailedObserve(), persistErr
 			}
 			return NewTerminalObserve(errUpdateMappingNotFound), nil
@@ -280,7 +282,6 @@ func clearTerminalError(svcCtx *service.ServiceContext, crCtx *service.RequestCR
 		}
 		sw := crCtx.StatusWriter()
 		sw.SetTerminalError("")
-		sw.SetTerminalResponse(nil)
 		sw.SetOperationStartedAt(nil)
 		return svcCtx.LocalKube.Status().Update(svcCtx.Ctx, resource)
 	})

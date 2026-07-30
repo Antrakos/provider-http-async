@@ -109,6 +109,27 @@ type AsyncRequestParameters struct {
 	// +optional
 	ExternalRef string `json:"externalRef,omitempty"`
 
+	// IsTerminalError is a jq expression that classifies a failure as terminal
+	// (stall until a spec change) versus retryable (requeue and re-fire, the
+	// default). Evaluated against the same context as externalRef — {spec, status,
+	// response, poll} — after a mutate response (CREATE/UPDATE/DELETE, polling or
+	// not) or a poll response that the poll loop reported as failed. It is NOT
+	// evaluated on the OBSERVE existence-check response.
+	//
+	// Resolves to string or boolean, following the externalRef pattern:
+	//   - non-empty string → terminal; the string is the surfaced message
+	//     (status.terminalError + Ready=False with a "Terminal error: " prefix);
+	//   - true            → terminal with a provider-authored default message;
+	//   - empty / false / null → retry (the default).
+	//
+	// Unset (empty) is the base provider-http behavior generalized to polling:
+	// every failure requeues and re-fires, except a polling.timeout (operation
+	// state unknown), which is terminated by the provider regardless. Terminal is
+	// strictly opt-in; the full .status (not just .status.externalRef) is available
+	// in the context, so e.g. `.status.failed > 5` yields a bounded-retry policy.
+	// +optional
+	IsTerminalError string `json:"isTerminalError,omitempty"`
+
 	// OIDC overrides the ProviderConfig OIDC settings for this resource.
 	// +optional
 	OIDC *common.OIDCConfig `json:"oidc,omitempty"`
@@ -189,50 +210,50 @@ type AsyncRequestStatus struct {
 	// +optional
 	ExternalRef string `json:"externalRef,omitempty"`
 
+	// TerminalError holds the message from a terminal failure — a failure classified as
+	// not self-healing, so the controller stalls until a spec change. It is no longer
+	// polling-specific: it is written by the user's spec.isTerminalError jq expression
+	// (evaluated on a mutate response or a poll-failure response) and by provider-authored
+	// terminals (polling.url bad/empty, polling.timeout, drift with no UPDATE mapping). The
+	// message is the user expression's value coerced to a string (a structured object/array
+	// is JSON-marshaled, a scalar is fmt.Sprint'd) or a provider-authored string. While set
+	// and observedGeneration == generation the controller reports the resource unhealthy
+	// (Ready=False, "Terminal error: " prefix) and does NOT re-fire the mutate call. A spec
+	// change bumps the generation; IsUpToDate detects the drift, clears terminalError, and
+	// re-evaluates. The full failing response is surfaced in status.response (same as base
+	// provider-http); terminalError carries only the message.
+	// +optional
+	TerminalError string `json:"terminalError,omitempty"`
+
 	// Polling holds state for the in-flight long-running operation poll loop.
 	// +optional
 	Polling PollingStatus `json:"polling,omitempty"`
 }
 
 // PollingStatus groups the fields that track an in-flight long-running operation.
-// Response, StartedAt, TerminalError and TerminalResponse track its lifetime; the
-// terminal pair is cleared on recovery while Response/StartedAt persist across a
-// terminal failure so a corrected spec resumes the operation.
+// Response (the crash-recovery anchor) is set when the mutate call succeeds and cleared
+// only when the operation completes or its anchor policy fires; StartedAt tracks its
+// lifetime. Terminal failures no longer live here — see AsyncRequestStatus.TerminalError.
 type PollingStatus struct {
 	// Response is the raw response from the mutate call (CREATE/UPDATE/DELETE) whose
 	// long-running operation is being polled. It is the crash-recovery anchor: while
 	// non-null, a reconcile resumes polling (recomputing polling.url against this
 	// response) instead of re-firing the mutate call. Set when the mutate call succeeds
-	// and cleared only when the operation completes (or the resource is deleted). It is
-	// deliberately retained across a terminal poll failure so a corrected polling.url
-	// resumes the existing operation rather than creating a duplicate.
+	// and cleared when the operation completes or its cause-dependent anchor policy
+	// fires. Retained across a terminal polling.timeout / bad-polling.url so a corrected
+	// spec resumes the existing operation rather than creating a duplicate; cleared on an
+	// operation failure (polling.error non-null) since the operation is dead and a retry
+	// re-fires a fresh, duplicate-safe mutate.
 	// +optional
 	Response *runtime.RawExtension `json:"response,omitempty"`
 
 	// StartedAt is the time polling began. Combined with polling.timeout it gives
 	// the absolute deadline across all reconciles, preventing the timeout from
-	// resetting on every requeue.
+	// resetting on every requeue. Cleared together with the anchor on operation
+	// completion or an operation-failure anchor clear; retained across a
+	// timeout/config terminal so a corrected spec resumes within the same budget.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
-
-	// TerminalError holds the human message from a terminal poll failure: the value the
-	// user's polling.error jq expression returned, coerced to a string (a structured
-	// object/array is JSON-marshaled, a scalar is fmt.Sprint'd); or a provider-authored
-	// message for a configuration/timeout terminal. While set, the controller reports the
-	// resource unhealthy and stops re-firing the mutate call until the spec changes
-	// (tracked via observedGeneration). Cleared on recovery together with terminalResponse.
-	// +optional
-	TerminalError string `json:"terminalError,omitempty"`
-
-	// TerminalResponse holds the full poll HTTP response (body/headers/statusCode) captured
-	// at the moment a poll terminated with an error, so a classifier can key off its typed
-	// statusCode and structured body (e.g. .body.error.code) the way it would off a mutate
-	// response — independent of what polling.error extracted into terminalError. Only the
-	// polling.error branch of the poll loop populates this; configuration and timeout terminal
-	// failures leave it nil and write terminalError only. Cleared on recovery together with
-	// terminalError.
-	// +optional
-	TerminalResponse *Response `json:"terminalResponse,omitempty"`
 }
 
 type Cache struct {

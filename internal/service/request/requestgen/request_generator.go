@@ -63,6 +63,10 @@ func GenerateRequestContext(forProvider interfaces.MappedHTTPRequestSpec, status
 
 // GenerateRequestContextForPoll builds the jq object with optional .status and .poll.response injection.
 // status may be nil (no .status key injected). pollResponse may be nil (no .poll key injected).
+//
+// .status exposes the FULL observed state (not just externalRef) so jq expressions —
+// externalRef, and the new isTerminalError — can key off the entire status, including
+// .status.failed for bounded-retry policies (e.g. `.status.failed > 5`).
 func GenerateRequestContextForPoll(
 	forProvider interfaces.MappedHTTPRequestSpec,
 	status interfaces.RequestStatusReader,
@@ -77,10 +81,7 @@ func GenerateRequestContextForPoll(
 	maps.Copy(baseMap, responseMap)
 
 	if status != nil {
-		statusMap := map[string]interface{}{
-			"externalRef": status.GetExternalRefValue(),
-		}
-		baseMap["status"] = statusMap
+		baseMap["status"] = status.GetStatusMap()
 	}
 
 	if pollResponse != nil {
@@ -105,6 +106,10 @@ func GenerateRequestContextForPoll(
 // This is the path used by the poll loop, where .response is the stable mutate response
 // carried as a map across iterations. Injecting it through StructToMap on a wrapper type
 // would drop the body (unexported fields serialize to {}), so it is merged directly.
+//
+// .status exposes the FULL observed state (not just externalRef) so jq expressions —
+// externalRef, and the new isTerminalError — can key off the entire status, including
+// .status.failed for bounded-retry policies (e.g. `.status.failed > 5`).
 func GenerateRequestContextFromMap(
 	forProvider interfaces.MappedHTTPRequestSpec,
 	status interfaces.RequestStatusReader,
@@ -119,9 +124,7 @@ func GenerateRequestContextFromMap(
 	baseMap["response"] = responseMap
 
 	if status != nil {
-		baseMap["status"] = map[string]interface{}{
-			"externalRef": status.GetExternalRefValue(),
-		}
+		baseMap["status"] = status.GetStatusMap()
 	}
 
 	if pollResponse != nil {

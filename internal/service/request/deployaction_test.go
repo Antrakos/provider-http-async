@@ -2,7 +2,9 @@ package request
 
 import (
 	"context"
+	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -453,7 +455,14 @@ func TestDeployAction_AsyncCreate_DoneAfterTwoPollIterations(t *testing.T) {
 	}
 }
 
-func TestDeployAction_AsyncCreate_TerminalError(t *testing.T) {
+// TestDeployAction_AsyncCreate_OperationFailure_RetryByDefault verifies the design doc's
+// default: an operation failure (polling.done + polling.error non-null) with isTerminalError
+// UNSET is retry, not terminal. The poll positively confirmed the operation finished without
+// creating the resource (edge case #1), so a retry re-fires a fresh, duplicate-safe mutate:
+// the anchor is CLEARED, no terminal is set, the failing poll response is surfaced to
+// status.response (so an operator can inspect the failure), and DeployAction returns nil so the
+// controller requeues (the next OBSERVE overwrites status.response before the mutate re-fires).
+func TestDeployAction_AsyncCreate_OperationFailure_RetryByDefault(t *testing.T) {
 	httpMock := &MockHttpClient{
 		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			if method == "POST" {
@@ -490,17 +499,294 @@ func TestDeployAction_AsyncCreate_TerminalError(t *testing.T) {
 	crCtx := service.NewRequestCRContext(cr)
 
 	err := DeployAction(svcCtx, crCtx, "CREATE")
-	// Terminal errors are written to status, not returned as Go errors
+	// Retry-by-default: DeployAction returns nil so the controller requeues and re-fires the
+	// mutate next reconcile.
 	if err != nil {
-		t.Fatalf("expected nil error (terminal failure written to status), got: %v", err)
+		t.Fatalf("expected nil error (operation-failure retry-by-default), got: %v", err)
 	}
-	// The anchor is PRESERVED across a terminal failure so a spec change resumes the
-	// existing operation rather than re-creating it.
-	if cr.Status.Polling.Response == nil {
-		t.Error("expected polling.response anchor to be retained after a terminal poll failure")
+	// The anchor is CLEARED: the operation is dead, so a retry re-fires a fresh mutate rather
+	// than re-polling the dead operation.
+	if cr.Status.Polling.Response != nil {
+		t.Error("expected polling.response anchor CLEARED after an operation failure (retry-by-default)")
 	}
-	if cr.Status.Polling.TerminalError == "" {
-		t.Error("expected terminalError to be persisted")
+	if cr.Status.TerminalError != "" {
+		t.Errorf("expected no terminalError on retry-by-default, got %q", cr.Status.TerminalError)
+	}
+	// The failing poll response is surfaced to status.response so an operator can inspect the
+	// full failure until the next reconcile's OBSERVE overwrites it. The real error body is kept.
+	if cr.Status.Response.Body == "" {
+		t.Error("expected failing poll response surfaced to status.response on poll-failure retry")
+	}
+	// Option 2: the write is shaped as a failed-mutate equivalent so base's routing guard
+	// (isObjectValidForObservation: !(method==POST && IsHTTPError(statusCode))) reads the resource
+	// as NOT created and the next reconcile re-fires CREATE. Both fields are required.
+	if cr.Status.Response.StatusCode != pollFailureStatusCode {
+		t.Errorf("expected status.response.statusCode overridden to %d (failed-mutate shape), got %d", pollFailureStatusCode, cr.Status.Response.StatusCode)
+	}
+	if cr.Status.RequestDetails.Method != http.MethodPost {
+		t.Errorf("expected status.requestDetails.method stamped POST (failed-mutate shape), got %q", cr.Status.RequestDetails.Method)
+	}
+	// The failure counter is NOT incremented: a poll GET is a read, so even though we persist a
+	// 500 it must bypass statushandler's incrementFailures and leave .status.failed untouched.
+	if cr.Status.Failed != 0 {
+		t.Errorf("expected status.failed unchanged (0) on poll-failure retry, got %d", cr.Status.Failed)
+	}
+}
+
+// TestDeployAction_AsyncCreate_OperationFailure_Terminal verifies the opt-in: an operation
+// failure with spec.isTerminalError resolving to a non-empty string stalls the resource. The
+// message is persisted to status.terminalError, the anchor is CLEARED (the operation is dead),
+// and DeployAction returns nil (a terminal is written to status, not returned as a Go error).
+func TestDeployAction_AsyncCreate_OperationFailure_Terminal(t *testing.T) {
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			if method == "POST" {
+				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+					StatusCode: 202, Body: `{"name": "operations/456"}`,
+				}}, nil
+			}
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+				StatusCode: 200,
+				Body:       `{"done": true, "error": {"message": "quota exceeded"}}`,
+			}}, nil
+		},
+	}
+
+	cr := &v1alpha2.AsyncRequest{
+		ObjectMeta: v1.ObjectMeta{Name: "test-request-term", Namespace: "testns"},
+		Spec: v1alpha2.AsyncRequestSpec{
+			ForProvider: v1alpha2.AsyncRequestParameters{
+				Payload: v1alpha2.Payload{Body: testBody, BaseUrl: testURL},
+				// isTerminalError keys off the failing poll response body to surface a message.
+				IsTerminalError: `.poll.response.body.error.message`,
+				Mappings: []v1alpha2.Mapping{{
+					Method: "POST", Body: ".payload.body", URL: ".payload.baseUrl",
+					Polling: &common.Polling{
+						URL:   `"http://api/operations/456"`,
+						Done:  ".poll.response.body.done == true",
+						Error: ".poll.response.body.error",
+					},
+				}},
+			},
+		},
+	}
+
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	crCtx := service.NewRequestCRContext(cr)
+
+	err := DeployAction(svcCtx, crCtx, "CREATE")
+	if err != nil {
+		t.Fatalf("expected nil error (terminal written to status), got: %v", err)
+	}
+	// The anchor is CLEARED on an operation-failure terminal (the operation is dead).
+	if cr.Status.Polling.Response != nil {
+		t.Error("expected polling.response anchor CLEARED on operation-failure terminal")
+	}
+	if cr.Status.TerminalError != "quota exceeded" {
+		t.Errorf("expected terminalError from isTerminalError expression, got %q", cr.Status.TerminalError)
+	}
+	// The failing poll response is surfaced to status.response so an operator can inspect the
+	// full failure; it is retained (alongside the terminal) until a spec change clears the terminal.
+	if cr.Status.Response.Body == "" {
+		t.Error("expected failing poll response surfaced to status.response on operation-failure terminal")
+	}
+	// Option 2: even on a terminal the write is shaped as a failed-mutate equivalent so that, once
+	// the operator clears the terminal, routing reads the resource as NOT created and re-fires CREATE
+	// rather than OBSERVE-ing an externalRef-keyed URL that never resolved.
+	if cr.Status.Response.StatusCode != pollFailureStatusCode {
+		t.Errorf("expected status.response.statusCode overridden to %d (failed-mutate shape), got %d", pollFailureStatusCode, cr.Status.Response.StatusCode)
+	}
+	if cr.Status.RequestDetails.Method != http.MethodPost {
+		t.Errorf("expected status.requestDetails.method stamped POST (failed-mutate shape), got %q", cr.Status.RequestDetails.Method)
+	}
+}
+
+// TestDeployAction_NonPolling_IsTerminalError_Stalls verifies the opt-in on the non-polling
+// path: a non-2xx mutate with spec.isTerminalError resolving to a non-empty string stalls the
+// resource instead of returning a retryable Go error. The message is persisted to
+// status.terminalError, DeployAction returns nil (terminal written to status, not surfaced as an
+// error), and the failing response stays in status.response.
+func TestDeployAction_NonPolling_IsTerminalError_Stalls(t *testing.T) {
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+				StatusCode: 422, Body: `{"error": {"message": "invalid config"}}`,
+			}, HttpRequest: httpClient.HttpRequest{Method: "POST", URL: testURL}}, nil
+		},
+	}
+	cr := &v1alpha2.AsyncRequest{
+		ObjectMeta: v1.ObjectMeta{Name: "test-nonpoll-term", Namespace: "testns"},
+		Spec: v1alpha2.AsyncRequestSpec{
+			ForProvider: v1alpha2.AsyncRequestParameters{
+				Payload: v1alpha2.Payload{Body: testBody, BaseUrl: testURL},
+				// Key off the failing mutate response body (.response, not .poll — no poll ran).
+				IsTerminalError: `.response.body.error.message`,
+				Mappings:        []v1alpha2.Mapping{{Method: "POST", Body: ".payload.body", URL: ".payload.baseUrl"}},
+			},
+		},
+	}
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	crCtx := service.NewRequestCRContext(cr)
+
+	err := DeployAction(svcCtx, crCtx, "CREATE")
+	if err != nil {
+		t.Fatalf("expected nil error (terminal written to status), got: %v", err)
+	}
+	if cr.Status.TerminalError != "invalid config" {
+		t.Errorf("expected terminalError from isTerminalError expression, got %q", cr.Status.TerminalError)
+	}
+	// The failing mutate response is surfaced via the status handler before classification.
+	if cr.Status.Response.StatusCode != 422 {
+		t.Errorf("expected failing mutate response (422) surfaced to status.response, got %d", cr.Status.Response.StatusCode)
+	}
+}
+
+// TestDeployAction_NonPolling_IsTerminalError_BoundedRetry exercises the design's marquee
+// bounded-retry use case: keying isTerminalError off .status.failed. The full status is exposed
+// in the jq context (GetStatusMap), and the failure counter is incremented by the status handler
+// BEFORE classification runs, so with Failed preset to 5 the incremented value (6) trips
+// `.status.failed > 5` and the resource stalls. Below the threshold it stays a retryable error.
+func TestDeployAction_NonPolling_IsTerminalError_BoundedRetry(t *testing.T) {
+	newCR := func(failed int32) *v1alpha2.AsyncRequest {
+		cr := &v1alpha2.AsyncRequest{
+			ObjectMeta: v1.ObjectMeta{Name: "test-bounded", Namespace: "testns"},
+			Spec: v1alpha2.AsyncRequestSpec{
+				ForProvider: v1alpha2.AsyncRequestParameters{
+					Payload:         v1alpha2.Payload{Body: testBody, BaseUrl: testURL},
+					IsTerminalError: `.status.failed > 5`,
+					Mappings:        []v1alpha2.Mapping{{Method: "POST", Body: ".payload.body", URL: ".payload.baseUrl"}},
+				},
+			},
+		}
+		cr.Status.Failed = failed
+		return cr
+	}
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+				StatusCode: 500, Body: `{}`,
+			}, HttpRequest: httpClient.HttpRequest{Method: "POST", URL: testURL}}, nil
+		},
+	}
+
+	// Below threshold: Failed=4 → incremented to 5 → `5 > 5` is false → retryable error.
+	crBelow := newCR(4)
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	if err := DeployAction(svcCtx, service.NewRequestCRContext(crBelow), "CREATE"); err == nil {
+		t.Error("below threshold: expected a retryable Go error, got nil (should not have stalled)")
+	}
+	if crBelow.Status.TerminalError != "" {
+		t.Errorf("below threshold: expected no terminalError, got %q", crBelow.Status.TerminalError)
+	}
+
+	// At/over threshold: Failed=5 → incremented to 6 → `6 > 5` is true → terminal stall.
+	crOver := newCR(5)
+	if err := DeployAction(svcCtx, service.NewRequestCRContext(crOver), "CREATE"); err != nil {
+		t.Fatalf("over threshold: expected nil error (terminal stall), got %v", err)
+	}
+	if crOver.Status.TerminalError == "" {
+		t.Error("over threshold: expected terminalError set (bounded retry exhausted)")
+	}
+}
+
+// TestDeployAction_IsTerminalError_BrokenExpression_Stalls verifies that a broken isTerminalError
+// jq expression is itself treated as terminal (rather than surfacing as a retry that would hot-loop
+// the mutate on a config error the requeue cannot fix). The surfaced message names the jq failure.
+func TestDeployAction_IsTerminalError_BrokenExpression_Stalls(t *testing.T) {
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+				StatusCode: 500, Body: `{}`,
+			}, HttpRequest: httpClient.HttpRequest{Method: "POST", URL: testURL}}, nil
+		},
+	}
+	cr := &v1alpha2.AsyncRequest{
+		ObjectMeta: v1.ObjectMeta{Name: "test-broken-expr", Namespace: "testns"},
+		Spec: v1alpha2.AsyncRequestSpec{
+			ForProvider: v1alpha2.AsyncRequestParameters{
+				Payload: v1alpha2.Payload{Body: testBody, BaseUrl: testURL},
+				// tonumber on a non-numeric string is a jq runtime error.
+				IsTerminalError: `"not-a-number" | tonumber`,
+				Mappings:        []v1alpha2.Mapping{{Method: "POST", Body: ".payload.body", URL: ".payload.baseUrl"}},
+			},
+		},
+	}
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	crCtx := service.NewRequestCRContext(cr)
+
+	if err := DeployAction(svcCtx, crCtx, "CREATE"); err != nil {
+		t.Fatalf("expected nil error (broken expression stalls, terminal written to status), got %v", err)
+	}
+	if !strings.Contains(cr.Status.TerminalError, "isTerminalError jq expression failed") {
+		t.Errorf("expected terminalError naming the jq failure, got %q", cr.Status.TerminalError)
+	}
+}
+
+// TestDeployAction_PollingMutate_NonSuccess_RetryByDefault covers the polling-mutate non-2xx block:
+// a polling mapping whose mutate call itself returns a non-2xx (e.g. 400) — before any poll — is
+// retryable by default. DeployAction surfaces the response to status.response, returns a Go error so
+// the controller requeues, and persists NO anchor (nothing was side-effected, so re-firing is safe).
+func TestDeployAction_PollingMutate_NonSuccess_RetryByDefault(t *testing.T) {
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+				StatusCode: 400, Body: `{"error": "bad request"}`,
+			}, HttpRequest: httpClient.HttpRequest{Method: "POST", URL: testURL}}, nil
+		},
+	}
+	cr := crWithPolling(`"http://api/operations/1"`, nil)
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	crCtx := service.NewRequestCRContext(cr)
+
+	err := DeployAction(svcCtx, crCtx, "CREATE")
+	if err == nil {
+		t.Fatal("expected a retryable Go error for a polling-mutate 400, got nil")
+	}
+	wantMsg := "HTTP POST request failed with status code: 400"
+	if err.Error() != wantMsg {
+		t.Errorf("error message: want %q, got %q", wantMsg, err.Error())
+	}
+	// No anchor: the mutate never succeeded, so there is no in-flight operation to resume.
+	if cr.Status.Polling.Response != nil {
+		t.Error("expected no polling.response anchor after a failed polling-mutate")
+	}
+	// The failing response is still surfaced for operator inspection.
+	if cr.Status.Response.StatusCode != 400 {
+		t.Errorf("expected failing mutate response (400) surfaced to status.response, got %d", cr.Status.Response.StatusCode)
+	}
+	if cr.Status.TerminalError != "" {
+		t.Errorf("expected no terminalError on retry-by-default, got %q", cr.Status.TerminalError)
+	}
+}
+
+// TestDeployAction_PollingMutate_NonSuccess_Terminal verifies the opt-out on the polling-mutate
+// path: a polling mapping whose mutate returns non-2xx with spec.isTerminalError matching stalls
+// the resource. DeployAction returns nil, terminalError carries the message, and no anchor is set.
+func TestDeployAction_PollingMutate_NonSuccess_Terminal(t *testing.T) {
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+				StatusCode: 403, Body: `{"error": {"message": "forbidden"}}`,
+			}, HttpRequest: httpClient.HttpRequest{Method: "POST", URL: testURL}}, nil
+		},
+	}
+	cr := crWithPolling(`"http://api/operations/1"`, nil)
+	cr.Spec.ForProvider.IsTerminalError = `.response.body.error.message`
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	crCtx := service.NewRequestCRContext(cr)
+
+	err := DeployAction(svcCtx, crCtx, "CREATE")
+	if err != nil {
+		t.Fatalf("expected nil error (terminal written to status), got: %v", err)
+	}
+	if cr.Status.TerminalError != "forbidden" {
+		t.Errorf("expected terminalError from isTerminalError expression, got %q", cr.Status.TerminalError)
+	}
+	if cr.Status.Polling.Response != nil {
+		t.Error("expected no polling.response anchor on a failed polling-mutate terminal")
+	}
+	if cr.Status.Response.StatusCode != 403 {
+		t.Errorf("expected failing mutate response (403) surfaced to status.response, got %d", cr.Status.Response.StatusCode)
 	}
 }
 
@@ -592,7 +878,7 @@ func TestDeployAction_OrphanRecovery_NoDuplicate(t *testing.T) {
 	if cr.Status.Polling.Response == nil {
 		t.Fatal("step 1: expected polling.response anchor retained after bad-url terminal failure")
 	}
-	if cr.Status.Polling.TerminalError == "" {
+	if cr.Status.TerminalError == "" {
 		t.Error("step 1: expected terminalError set for bad polling.url")
 	}
 
@@ -600,7 +886,7 @@ func TestDeployAction_OrphanRecovery_NoDuplicate(t *testing.T) {
 	// reconciler would on generation drift) and resumes — the retained anchor is reused,
 	// so POST must NOT fire again.
 	cr.Generation = 2
-	cr.Status.Polling.TerminalError = ""
+	cr.Status.TerminalError = ""
 	cr.Spec.ForProvider.Mappings[0].Polling.URL = `"http://api/" + .response.body.name`
 
 	if err := DeployAction(svcCtx, crCtx, "CREATE"); err != nil {

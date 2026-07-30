@@ -235,7 +235,7 @@ func TestObserve(t *testing.T) {
 				},
 				mg: func() *v1alpha2.AsyncRequest {
 					cr := namespacedRequest(func(cr *v1alpha2.AsyncRequest) {
-						cr.Status.Polling.TerminalError = "polling.url resolved to a bare path"
+						cr.Status.TerminalError = "polling.url resolved to a bare path"
 					})
 					cr.Generation = 1
 					cr.Status.SetObservedGeneration(1)
@@ -1285,7 +1285,7 @@ func TestOrphanRecovery_RoutesResumeThroughCreate(t *testing.T) {
 	if postCalls != 1 {
 		t.Fatalf("step 1: expected 1 POST, got %d", postCalls)
 	}
-	if cr.Status.Polling.Response == nil || cr.Status.Polling.TerminalError == "" {
+	if cr.Status.Polling.Response == nil || cr.Status.TerminalError == "" {
 		t.Fatal("step 1: expected anchor retained + terminalError set after bad polling.url")
 	}
 
@@ -1302,8 +1302,8 @@ func TestOrphanRecovery_RoutesResumeThroughCreate(t *testing.T) {
 	if obs.ResourceExists {
 		t.Error("step 2: expected ResourceExists=false so the controller routes to Create() (no UPDATE mapping)")
 	}
-	if cr.Status.Polling.TerminalError != "" {
-		t.Errorf("step 2: expected terminalError cleared on generation drift, got %q", cr.Status.Polling.TerminalError)
+	if cr.Status.TerminalError != "" {
+		t.Errorf("step 2: expected terminalError cleared on generation drift, got %q", cr.Status.TerminalError)
 	}
 
 	// Step 3: Create() resumes the poll via the retained anchor; a completing mock poller

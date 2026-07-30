@@ -119,6 +119,10 @@ type MappedHTTPRequestSpec interface {
 	// GetExternalRef returns the jq expression that extracts the stable external identifier.
 	GetExternalRef() string
 
+	// GetIsTerminalError returns the jq expression that classifies a failure as terminal
+	// (stall) versus retryable (requeue). Empty means retry-by-default (base behavior).
+	GetIsTerminalError() string
+
 	// GetOIDC returns the per-resource OIDC config override; may be nil.
 	GetOIDC() *common.OIDCConfig
 }
@@ -287,14 +291,9 @@ type RequestStatusReader interface {
 	// instead of re-firing the mutate call.
 	GetPollingResponse() map[string]interface{}
 
-	// GetTerminalError returns the persisted terminal poll-failure message, or "" if
+	// GetTerminalError returns the persisted terminal-failure message, or "" if
 	// the resource is not in a terminal failure state.
 	GetTerminalError() string
-
-	// GetTerminalResponse returns the full poll HTTP response captured when the poll
-	// terminated with an error, or nil when the terminal failure was a configuration/
-	// timeout error or the resource is not in a terminal failure state.
-	GetTerminalResponse() HTTPResponse
 
 	// GetObservedGeneration returns the metadata.generation at which the resource last
 	// reached a ready or terminally-stalled state.
@@ -305,6 +304,12 @@ type RequestStatusReader interface {
 
 	// GetOperationStartedAt returns the time the in-flight operation began polling, or nil.
 	GetOperationStartedAt() *metav1.Time
+
+	// GetStatusMap returns the full status serialized to a JSON-compatible map, so jq
+	// expressions (externalRef, isTerminalError) can key off the entire observed state —
+	// including .status.failed for bounded-retry policies — not just .status.externalRef.
+	// Returns nil when the status cannot be serialized (a programming error).
+	GetStatusMap() map[string]interface{}
 }
 
 // RequestStatusWriter provides write access to AsyncRequest status fields.
@@ -324,16 +329,11 @@ type RequestStatusWriter interface {
 	// that anchors an in-flight long-running operation in status.polling.response.
 	SetPollingResponse(m map[string]interface{})
 
-	// SetTerminalError persists (or clears, when passed "") the terminal poll-failure
-	// message. It does not increment the failure counter — a terminal failure is a
-	// stable state, not a transient retry.
+	// SetTerminalError persists (or clears, when passed "") the terminal-failure message
+	// (relocated out of status.polling to top-level status.terminalError). It does not
+	// increment the failure counter — a terminal failure is a stable state, not a transient
+	// retry. The full failing response is surfaced separately in status.response.
 	SetTerminalError(msg string)
-
-	// SetTerminalResponse persists (or clears, when passed nil) the full poll HTTP response
-	// captured at the moment a poll terminated with an error. Only the polling.error branch
-	// of the poll loop sets this; configuration and timeout terminal failures leave it nil
-	// and write terminalError alone. Cleared on recovery together with terminalError.
-	SetTerminalResponse(resp HTTPResponse)
 
 	// SetObservedGeneration records the metadata.generation at which the resource
 	// reached a ready or terminally-stalled state.

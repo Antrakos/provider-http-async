@@ -63,3 +63,19 @@ func RawExtensionToMap(ext *runtime.RawExtension) map[string]interface{} {
 	}
 	return m
 }
+
+// StructToMap serializes any JSON-marshalable value to a JSON-compatible map, so jq
+// expressions can key off the whole struct (e.g. the full status). It lives here rather
+// than in internal/json to avoid a test-build import cycle (internal/json's tests import
+// the API packages). Returns nil on a marshal/unmarshal error (a programming error).
+func StructToMap(obj interface{}) map[string]interface{} {
+	data, err := json.Marshal(obj)
+	if err != nil {
+		return nil
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil
+	}
+	return m
+}

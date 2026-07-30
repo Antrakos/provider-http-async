@@ -1,6 +1,8 @@
 package request
 
 import (
+	"fmt"
+	"net/http"
 	"strconv"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
@@ -9,7 +11,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 
-	"github.com/Antrakos/provider-http-async/apis/interfaces"
 	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
 	datapatcher "github.com/Antrakos/provider-http-async/internal/data-patcher"
 	"github.com/Antrakos/provider-http-async/internal/jq"
@@ -84,28 +85,56 @@ func DeployAction(svcCtx *service.ServiceContext, crCtx *service.RequestCRContex
 			if err := statusHdlr.SetRequestStatus(); err != nil {
 				return err
 			}
-			// Surface a non-2xx mutate response (that is not in allowedStatusCodes) as a real
-			// error so the controller reports Synced=False (ReconcileError) instead of logging
-			// "Successfully requested update" and reporting ReconcileSuccess. Without this a
-			// PATCH/PUT/DELETE to a broken URL (e.g. .../models/ from an empty externalRef) that
-			// returns 404 is swallowed: SetRequestStatus increments the failures counter and
-			// returns nil, so the reconciler reports success and requeues forever — the loop is
-			// silent rather than merely stuck. Status is persisted first (above), so the
-			// response/statusCode/Failure counter stay visible alongside the failed reconcile.
+			// Surface a non-2xx mutate response (that is not in allowedStatusCodes) per the design
+			// doc's default-retry policy: evaluate spec.isTerminalError against the mutate response.
+			// Terminal → SetTerminalFailure (stall until spec change); the full response is already
+			// in status.response (above). Retry (unset / empty / false) → return a Go error so the
+			// controller reports Synced=False (ReconcileError) and requeues, re-firing the mutate —
+			// the base provider-http behavior. Without the IsHTTPError return a non-2xx is swallowed
+			// (SetRequestStatus increments the counter and returns nil), so the reconciler reports
+			// success and requeues forever — silent rather than merely stuck. Status is persisted
+			// first (above), so the response/statusCode/failure counter stay visible.
 			if utils.IsHTTPError(details.HttpResponse.StatusCode, spec.GetAllowedStatusCodes()) {
+				if msg, terminal := classifyMutateTerminalError(crCtx, &details.HttpResponse); terminal {
+					return polling.SetTerminalFailure(svcCtx, crCtx, msg, false)
+				}
 				return errors.Errorf(utils.ErrStatusCode, requestmapping.GetEffectiveMethod(mapping), strconv.Itoa(details.HttpResponse.StatusCode))
 			}
 			return nil
 		}
 
-		// Polling is configured: don't surface the mutate response to statusHandler yet.
-		// Only proceed to polling if the mutate call itself succeeded.
+		// Polling is configured. Only proceed to polling if the mutate call itself succeeded:
+		// a transport error (sendErr != nil) returns it via statusHandler so the controller
+		// requeues with backoff (the anchor is not yet persisted, so the next reconcile re-fires
+		// the mutate — safe, nothing was side-effected).
 		if sendErr != nil {
 			statusHdlr, hdlrErr := statushandler.NewStatusHandler(svcCtx, crCtx, details, sendErr)
 			if hdlrErr != nil {
 				return hdlrErr
 			}
 			return statusHdlr.SetRequestStatus()
+		}
+
+		// Polling-mutate non-2xx: the mutate returned a non-success status (e.g. a 4xx/5xx). The
+		// base status-code heuristic cannot detect a 200-with-error-body, but it catches the rest.
+		// Per the design doc, the default is retry (re-fire the mutate); spec.isTerminalError is the
+		// opt-out to stall. No anchor is persisted yet, so there is nothing to clear — SetTerminalFailure
+		// with clearAnchor=false is a no-op on the anchor. The response is surfaced to status.response
+		// via statusHandler (below) before classifying, so a terminal message and the response coexist.
+		if utils.IsHTTPError(details.HttpResponse.StatusCode, spec.GetAllowedStatusCodes()) {
+			statusHdlr, hdlrErr := statushandler.NewStatusHandler(svcCtx, crCtx, details, nil)
+			if hdlrErr != nil {
+				return hdlrErr
+			}
+			if err := statusHdlr.SetRequestStatus(); err != nil {
+				return err
+			}
+			if msg, terminal := classifyMutateTerminalError(crCtx, &details.HttpResponse); terminal {
+				return polling.SetTerminalFailure(svcCtx, crCtx, msg, false)
+			}
+			// Retry: return a Go error so the controller requeues (ReconcileError) and re-fires the
+			// mutate on the next reconcile. The anchor was not persisted, so re-firing is duplicate-safe.
+			return errors.Errorf(utils.ErrStatusCode, requestmapping.GetEffectiveMethod(mapping), strconv.Itoa(details.HttpResponse.StatusCode))
 		}
 
 		mutateResponseMap = polling.ResponseToMap(&details.HttpResponse)
@@ -142,18 +171,24 @@ func DeployAction(svcCtx *service.ServiceContext, crCtx *service.RequestCRContex
 		return pollErr
 	}
 
+	// Provider-authored terminal (polling.timeout, bad/empty polling.url). Bypasses
+	// isTerminalError per the design doc — these are not properties of a response a user
+	// expression can see. The anchor is RETAINED (clearAnchor=false): the operation state
+	// is unknown, so a corrected spec must resume the existing operation, not re-fire. The
+	// poller only sets ClearAnchor=true on the operation-failure branch (handled below via
+	// FailingPollResponse), never on TerminalErr, so this is unconditionally a retain.
 	if result.TerminalErr != "" {
-		// Terminal poll failure (polling.error non-null, bad/empty polling.url, or
-		// timeout): set Ready=False, Synced=False and record the generation; the anchor is
-		// PRESERVED so a spec change resumes the existing operation rather than re-creating.
-		// terminalResponse is set only on the polling.error branch; pass a plain nil
-		// interface (not the nil *HttpResponse) for bad/empty polling.url and timeout so the
-		// setter clears the field rather than storing an empty Response via a typed nil.
-		var resp interfaces.HTTPResponse
-		if result.TerminalResponse != nil {
-			resp = result.TerminalResponse
-		}
-		return polling.SetTerminalFailure(svcCtx, crCtx, result.TerminalErr, resp)
+		return polling.SetTerminalFailure(svcCtx, crCtx, result.TerminalErr, false)
+	}
+
+	// Operation failure (polling.done + polling.error non-null): the poll confirmed the
+	// operation finished without creating the resource, so a retry is duplicate-safe
+	// (edge case #1). The anchor is cleared so a retry re-fires a fresh mutate, not re-polls
+	// a dead operation. spec.isTerminalError decides retry-vs-stall against the failing poll
+	// response; default (unset) is retry, matching the base provider-http behavior generalized
+	// to polling.
+	if result.FailingPollResponse != nil {
+		return handlePollOperationFailure(svcCtx, crCtx, mutateResponseMap, result)
 	}
 
 	if !result.Done {
@@ -165,6 +200,185 @@ func DeployAction(svcCtx *service.ServiceContext, crCtx *service.RequestCRContex
 	// Poll completed successfully. Extract externalRef and atomically clear the anchor so
 	// future reconciles OBSERVE instead of resuming.
 	return extractAndPersistExternalRef(svcCtx, crCtx, mutateResponseMap, result.PollResponse)
+}
+
+// handlePollOperationFailure classifies a poll-confirmed operation failure via spec.isTerminalError
+// and either stalls (terminal) or retries (re-fire mutate). In BOTH cases the failing poll response
+// is surfaced to status.response (the terminalResponse-merged-into-status.response model), so an
+// operator can inspect the full failure (statusCode / headers / body):
+//
+//   - isTerminalError resolves terminal (non-empty string / true): write the failing response to
+//     status.response, then SetTerminalFailure with the user's message (string) or the polling.error
+//     projection (true), clearing the anchor. status.response retains the full failure until a spec
+//     change bumps the generation and clears the terminal.
+//   - isTerminalError unset / empty / false / null: retry. Write the failing response to
+//     status.response, clear the anchor + StartedAt, and return nil so the controller requeues.
+//     status.response holds the failure only until the next reconcile's OBSERVE overwrites it, then
+//     the reconciler detects Create/Update and re-fires the mutate (duplicate-safe per edge case #1).
+func handlePollOperationFailure(
+	svcCtx *service.ServiceContext,
+	crCtx *service.RequestCRContext,
+	mutateResponseMap map[string]interface{},
+	result polling.Result,
+) error {
+	failingResponseMap := polling.ResponseToMap(result.FailingPollResponse)
+
+	// Surface the failing poll response to status.response in both branches before classifying,
+	// so a terminal message and the full response coexist and an operator can inspect the failure.
+	if err := persistPollFailureResponse(svcCtx, crCtx, result.FailingPollResponse); err != nil {
+		return err
+	}
+
+	if msg, terminal := classifyTerminalError(crCtx, mutateResponseMap, failingResponseMap, result.OperationErrorMessage); terminal {
+		// Terminal stall: the user classified this failure as not self-healing. Clear the
+		// anchor (the operation is dead) and persist the message with observedGeneration.
+		return polling.SetTerminalFailure(svcCtx, crCtx, msg, true)
+	}
+
+	// Retry: the operation failed but the resource was not created, so re-firing the mutate is
+	// duplicate-safe (edge case #1). Clear the anchor + StartedAt so the next reconcile re-fires
+	// a fresh mutate rather than resuming/re-polling the dead operation, then return nil so the
+	// controller requeues.
+	return clearAnchorAfterPollFailure(svcCtx, crCtx)
+}
+
+// classifyMutateTerminalError evaluates spec.isTerminalError against a failing mutate response
+// (CREATE/UPDATE/DELETE, polling or not). The response is .response in the jq context; there is no
+// .poll (no poll loop ran). The default message (for a bare-`true` result) is a provider-authored
+// mutate-failure string naming the status code. Returns (message, terminal) per the same rules as
+// classifyTerminalError.
+//
+// It is only called on an HTTP-error response (non-2xx not in allowedStatusCodes) — i.e. a mutate
+// that already failed, where the only open question is retry-vs-stall. A 2xx mutate is a success by
+// definition: nothing failed, so there is nothing to classify. The "200-with-error-body" case (a
+// success wire status wrapping an operation failure) exists ONLY on the polling path, where the poll
+// loop's polling.error expression detects it and routes it through the poll-failure classification
+// (handlePollOperationFailure); a non-polling mutate has no such notion and its 2xx is taken at face
+// value, matching base provider-http.
+func classifyMutateTerminalError(crCtx *service.RequestCRContext, resp *httpClient.HttpResponse) (string, bool) {
+	mutateResponseMap := polling.ResponseToMap(resp)
+	defaultMessage := fmt.Sprintf("isTerminalError classified the mutate response (HTTP %d) as terminal", resp.StatusCode)
+	return classifyTerminalError(crCtx, mutateResponseMap, nil, defaultMessage)
+}
+
+// classifyTerminalError evaluates spec.isTerminalError against the jq context built from the
+// failing response and returns (message, terminal). terminal is true when the expression
+// resolves to a non-empty string (the message) or boolean true (defaultMessage used). It is
+// false when the expression is unset, or resolves to empty / false / null — the retry default.
+//
+// mutateResponseMap is .response in the jq context (the stable mutate response — the anchor for
+// a poll failure, or the failing mutate response itself for a mutate failure). failingResponseMap
+// is .poll.response for a poll failure, or nil for a mutate failure. defaultMessage is used when
+// the expression resolves to a bare `true` (the user said "terminal" but gave no message): it is
+// the polling.error projection for a poll failure, or a provider-authored mutate-failure message.
+func classifyTerminalError(
+	crCtx *service.RequestCRContext,
+	mutateResponseMap map[string]interface{},
+	failingResponseMap map[string]interface{},
+	defaultMessage string,
+) (string, bool) {
+	expr := crCtx.Spec().GetIsTerminalError()
+	if expr == "" {
+		// Unset: the base provider-http behavior generalized to polling — retry.
+		return "", false
+	}
+	// Build the jq context the same way the poll loop does, so isTerminalError sees the exact
+	// same {spec, status, response, poll} the user's other expressions see. .response is the
+	// failing mutate response (a mutate failure) or the stable mutate response (a poll failure,
+	// where .poll.response is the failing poll response).
+	ctx := requestgen.GenerateRequestContextFromMap(crCtx.Spec(), crCtx.Status(), mutateResponseMap, failingResponseMap)
+	val, err := jq.ParseAny(expr, ctx)
+	if err != nil {
+		// A broken isTerminalError expression is itself a terminal failure: surfacing it as a
+		// retry would hot-loop the mutate on a config error the requeue cannot fix. Stall with
+		// the jq error so the operator fixes the expression.
+		return fmt.Sprintf("isTerminalError jq expression failed: %s", err.Error()), true
+	}
+	switch t := val.(type) {
+	case string:
+		if t == "" {
+			return "", false // empty string → retry (the default)
+		}
+		return t, true
+	case bool:
+		if !t {
+			return "", false // false → retry
+		}
+		// true → terminal with the default (provider/polling.error) message.
+		if defaultMessage == "" {
+			return "isTerminalError classified this failure as terminal", true
+		}
+		return defaultMessage, true
+	default:
+		// null or any non-string/non-bool value → retry (the default). A user wanting to key off
+		// a structured value should coerce it, e.g. `(.response.body.error.code // 0) >= 500`.
+		return "", false
+	}
+}
+
+// pollFailureStatusCode is the HTTP status persisted to status.response.statusCode on a poll
+// operation failure. It is a DELIBERATE OVERRIDE of the real transport status (a completed-with-
+// error LRO is typically HTTP 200 with an error block in the body). Base provider-http's routing
+// guard (isObjectValidForObservation) classifies a resource as "not created" only for a failed
+// POST — !(method == POST && IsHTTPError(statusCode)). A real 200 has IsHTTPError(200) == false,
+// so the guard would read the resource as created and misroute the retry to OBSERVE/Update instead
+// of re-firing CREATE (see docs/design-terminal-and-response-fields.md, "Existence-gate
+// interaction"). Persisting 500 (a server-side-failure status, semantically truer than the
+// transport 200 that merely wrapped an error) makes IsHTTPError true so the existing base guard
+// fires — no routing code changes. The real error body is preserved in status.response.body, and
+// the true 200 is still what isTerminalError/polling.error saw in the poll loop's jq context
+// (evaluated before this write). Option 3 (docs/prd-explicit-identity-model.md) removes the lie.
+const pollFailureStatusCode = 500
+
+// persistPollFailureResponse surfaces the failing poll response to status.response, the same field
+// a failed mutate lands in for base provider-http, so an operator can inspect the full failure
+// (statusCode / headers / body) and so base's routing guard treats it as a failed mutate.
+//
+// It is shaped as a failed-mutate equivalent — statusCode = pollFailureStatusCode (500, overriding
+// the real 200) and requestDetails.method = POST — because a poll operation failure IS the outcome
+// of the CREATE that started the operation. Both fields are required to trip base's
+// !(method == POST && IsHTTPError(statusCode)) guard; either alone leaves the resource reading as
+// "created" and misroutes the retry.
+//
+// The write goes DIRECTLY via the StatusWriter, deliberately NOT through statushandler: with
+// statusCode = 500 the shared handler would take its error branch (incrementFailures) and pollute
+// .status.failed, but a poll GET is a read and must not count toward the consecutive-mutate-failure
+// counter. Writing directly leaves the counter untouched. RetryOnConflict handles optimistic-lock
+// conflicts.
+func persistPollFailureResponse(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext, failingResponse *httpClient.HttpResponse) error {
+	resource := crCtx.GetCR()
+	nn := types.NamespacedName{Name: resource.GetName(), Namespace: resource.GetNamespace()}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := svcCtx.LocalKube.Get(svcCtx.Ctx, nn, resource); err != nil {
+			return errors.Wrap(err, "failed to get resource before persisting poll failure response")
+		}
+		sw := crCtx.StatusWriter()
+		// Keep the real error body/headers for operator inspection; override only the statusCode
+		// (see pollFailureStatusCode) and stamp the method as POST so base's guard recognizes the
+		// failed mutate.
+		sw.SetBody(failingResponse.Body)
+		sw.SetHeaders(failingResponse.Headers)
+		sw.SetStatusCode(pollFailureStatusCode)
+		sw.SetRequestDetails("", http.MethodPost, "", nil)
+		return svcCtx.LocalKube.Status().Update(svcCtx.Ctx, resource)
+	})
+}
+
+// clearAnchorAfterPollFailure clears the anchor + StartedAt so the next reconcile re-fires a fresh
+// mutate (the operation is dead and the resource was not created — duplicate-safe per edge case #1)
+// rather than re-polling. RetryOnConflict handles optimistic-lock conflicts.
+func clearAnchorAfterPollFailure(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext) error {
+	resource := crCtx.GetCR()
+	nn := types.NamespacedName{Name: resource.GetName(), Namespace: resource.GetNamespace()}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := svcCtx.LocalKube.Get(svcCtx.Ctx, nn, resource); err != nil {
+			return errors.Wrap(err, "failed to get resource before clearing anchor after poll failure")
+		}
+		sw := crCtx.StatusWriter()
+		sw.SetPollingResponse(nil)
+		sw.SetOperationStartedAt(nil)
+		return svcCtx.LocalKube.Status().Update(svcCtx.Ctx, resource)
+	})
 }
 
 // extractExternalRefFromResponse evaluates spec.externalRef against .response for the non-polling path.
@@ -237,19 +451,19 @@ func extractExternalRefInto(svcCtx *service.ServiceContext, crCtx *service.Reque
 	})
 }
 
-// buildExternalRefJQCtx assembles the jq context for externalRef evaluation.
+// buildExternalRefJQCtx assembles the jq context for externalRef evaluation. .status exposes
+// the FULL observed state (the same context isTerminalError is evaluated against), so a user
+// expression can key off the entire status — not just .status.externalRef.
 func buildExternalRefJQCtx(
 	status interface {
 		GetExternalRefValue() string
-		GetPollingResponse() map[string]interface{}
+		GetStatusMap() map[string]interface{}
 	},
 	mutateResponse map[string]interface{},
 	pollResponse map[string]interface{},
 ) map[string]interface{} {
 	ctx := map[string]interface{}{
-		"status": map[string]interface{}{
-			"externalRef": status.GetExternalRefValue(),
-		},
+		"status":   status.GetStatusMap(),
 		"response": mutateResponse,
 	}
 	if pollResponse != nil {

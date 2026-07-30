@@ -445,6 +445,45 @@ func Test_isUpToDate(t *testing.T) {
 				err: errNotFound,
 			},
 		},
+		// Option 2 regression: after a poll failure, persistPollFailureResponse writes status.response
+		// SHAPED as a failed-mutate equivalent (statusCode=500, method=POST) precisely so this
+		// populated response stays transparent to routing. isObjectValidForObservation reads
+		// !(POST && IsHTTPError(500)) == false, so objectNotCreated is true and the identity gate
+		// still routes an empty-externalRef, externalRef-keyed resource to Create() — exactly as if
+		// status.response were empty. Without the shaping (e.g. a real 200) the stored response would
+		// read as "created" and the resource would wrongly route to OBSERVE/Update, re-breaking the
+		// gate that 18d0222 added. No OBSERVE HTTP call is made.
+		"PollFailureShapedResponse_EmptyExternalRef_RoutesToCreate_NoHTTPCall": {
+			args: args{
+				http: &MockHttpClient{
+					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+						t.Errorf("OBSERVE must not fire after a poll-failure shaped write with empty externalRef; got %s %s", method, url)
+						return httpClient.HttpDetails{}, nil
+					},
+				},
+				localKube: &test.MockClient{
+					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+				},
+				mg: httpRequest(func(r *v1alpha2.AsyncRequest) {
+					// The poll-failure shaped write: real error body, but statusCode/method faked to
+					// the failed-mutate shape so routing reads the resource as NOT created.
+					r.Status.Response = v1alpha2.Response{
+						Body:       `{"done": true, "error": {"message": "quota exceeded"}}`,
+						StatusCode: http.StatusInternalServerError,
+					}
+					r.Status.RequestDetails = v1alpha2.Mapping{Method: http.MethodPost}
+					r.Status.ExternalRef = ""
+					r.Spec.ForProvider.Payload.BaseUrl = "https://aiplatform.googleapis.com/v1beta1/projects/p/locations/us-central1"
+					r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+						{Method: "POST", Action: "CREATE", URL: `.payload.baseUrl + "/models:upload"`, Body: ".payload.body"},
+						{Method: "GET", Action: "OBSERVE", URL: `.payload.baseUrl + "/models/" + .status.externalRef`},
+					}
+				}),
+			},
+			want: want{
+				err: errNotFound,
+			},
+		},
 		// The gate is URL-specific: a constant OBSERVE URL (or one not keyed on .status.externalRef)
 		// does not collapse when externalRef is empty, so OBSERVE must run and answer on its own
 		// merits. Here OBSERVE returns 200 (the imported resource exists at a fixed URL) and the
@@ -1206,7 +1245,7 @@ func TestIsUpToDate_TerminalClear_ResetsStartedAt(t *testing.T) {
 		{Method: "GET", Action: "OBSERVE", URL: ".payload.baseUrl + \"/\" + .status.externalRef"},
 	}
 	// Terminal failure recorded at generation 1 with a stale StartedAt.
-	cr.Status.Polling.TerminalError = "polling timeout after 30s for operation op-1"
+	cr.Status.TerminalError = "polling timeout after 30s for operation op-1"
 	cr.Status.Polling.StartedAt = &startedAt
 	cr.Status.SetObservedGeneration(1)
 	cr.Generation = 2 // spec changed since the terminal failure → generation drift
@@ -1223,8 +1262,8 @@ func TestIsUpToDate_TerminalClear_ResetsStartedAt(t *testing.T) {
 
 	_, _ = IsUpToDate(svcCtx, service.NewRequestCRContext(cr))
 
-	if cr.Status.Polling.TerminalError != "" {
-		t.Errorf("expected TerminalError cleared on generation drift, got %q", cr.Status.Polling.TerminalError)
+	if cr.Status.TerminalError != "" {
+		t.Errorf("expected TerminalError cleared on generation drift, got %q", cr.Status.TerminalError)
 	}
 	if cr.Status.Polling.StartedAt != nil {
 		t.Errorf("expected StartedAt reset to nil for a fresh timeout budget, got %v", cr.Status.Polling.StartedAt)

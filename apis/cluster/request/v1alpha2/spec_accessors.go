@@ -88,6 +88,12 @@ func (r *AsyncRequestParameters) GetExternalRef() string {
 	return r.ExternalRef
 }
 
+// GetIsTerminalError returns the jq expression that classifies a failure as terminal
+// (stall) versus retryable (requeue). Empty means retry-by-default.
+func (r *AsyncRequestParameters) GetIsTerminalError() string {
+	return r.IsTerminalError
+}
+
 // GetOIDC returns the per-resource OIDC config override.
 func (r *AsyncRequestParameters) GetOIDC() *common.OIDCConfig {
 	return r.OIDC
@@ -221,21 +227,9 @@ func (r *AsyncRequest) GetPollingResponse() map[string]interface{} {
 	return common.RawExtensionToMap(r.Status.Polling.Response)
 }
 
-// GetTerminalError returns the persisted terminal poll-failure message.
+// GetTerminalError returns the persisted terminal-failure message.
 func (r *AsyncRequest) GetTerminalError() string {
-	return r.Status.Polling.TerminalError
-}
-
-// GetTerminalResponse returns the full poll HTTP response captured when the poll
-// terminated with an error, or nil when the terminal failure was a configuration/timeout
-// error (not a polling.error result) or the resource is not in a terminal failure state.
-// A classifier keys off its typed statusCode and structured body (parse the JSON Body)
-// the way it would off a mutate response, independent of what polling.error extracted.
-func (r *AsyncRequest) GetTerminalResponse() interfaces.HTTPResponse {
-	if r.Status.Polling.TerminalResponse == nil {
-		return nil
-	}
-	return r.Status.Polling.TerminalResponse
+	return r.Status.TerminalError
 }
 
 // GetObservedGeneration returns the generation at which the resource last reached a
@@ -252,6 +246,15 @@ func (r *AsyncRequest) GetGeneration() int64 {
 // GetOperationStartedAt returns the time the in-flight operation began polling.
 func (r *AsyncRequest) GetOperationStartedAt() *metav1.Time {
 	return r.Status.Polling.StartedAt
+}
+
+// GetStatusMap returns the full status serialized to a JSON-compatible map, so jq
+// expressions (externalRef, isTerminalError) can key off the entire observed state —
+// including .status.failed for bounded-retry policies — not just .status.externalRef.
+func (r *AsyncRequest) GetStatusMap() map[string]interface{} {
+	// A fresh Get returns a value receiver copy; marshal that so we never mutate the live
+	// resource status while building the jq context.
+	return common.StructToMap(r.Status)
 }
 
 // Ensure AsyncRequest implements RequestResource

@@ -486,9 +486,7 @@ func Test_httpExternal_Observe(t *testing.T) {
 							},
 						},
 						Status: v1alpha2.AsyncRequestStatus{
-							Polling: v1alpha2.PollingStatus{
-								TerminalError: "polling.url resolved to a bare path",
-							},
+							TerminalError: "polling.url resolved to a bare path",
 						},
 					}
 					// observedGeneration == generation so the terminal failure is stable (not cleared
