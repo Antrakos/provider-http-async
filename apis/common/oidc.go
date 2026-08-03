@@ -51,6 +51,7 @@ type OIDCConfig struct {
 	// RefreshBefore causes the provider to re-exchange the SA token this long before
 	// the cached token's exp claim, as a Go duration string (e.g. "5m"). Defaults to 5m.
 	// +optional
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$`
 	RefreshBefore *string `json:"refreshBefore,omitempty"`
 }
 

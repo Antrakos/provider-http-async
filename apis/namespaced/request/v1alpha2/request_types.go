@@ -57,6 +57,8 @@ type AsyncRequestParameters struct {
 	Headers map[string][]string `json:"headers,omitempty"`
 
 	// WaitTimeout specifies the maximum time duration for waiting, as a Go duration string (e.g. "5m").
+	// +optional
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$`
 	WaitTimeout *string `json:"waitTimeout,omitempty"`
 
 	// InsecureSkipTLSVerify, when set to true, skips TLS certificate checks for the HTTP request.

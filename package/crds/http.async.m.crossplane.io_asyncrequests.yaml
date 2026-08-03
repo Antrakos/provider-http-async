@@ -219,10 +219,12 @@ spec:
                             interval:
                               description: Interval is the delay between poll iterations,
                                 as a Go duration string (e.g. "5s"). Defaults to 5s.
+                              pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
                               type: string
                             timeout:
                               description: Timeout bounds the whole poll loop, as
                                 a Go duration string (e.g. "30m"). Defaults to 30m.
+                              pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
                               type: string
                             url:
                               description: |-
@@ -291,6 +293,7 @@ spec:
                         description: |-
                           RefreshBefore causes the provider to re-exchange the SA token this long before
                           the cached token's exp claim, as a Go duration string (e.g. "5m"). Defaults to 5m.
+                        pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
                         type: string
                       serviceAccountTokenPath:
                         description: |-
@@ -514,6 +517,7 @@ spec:
                   waitTimeout:
                     description: WaitTimeout specifies the maximum time duration for
                       waiting, as a Go duration string (e.g. "5m").
+                    pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
                     type: string
                 required:
                 - mappings
@@ -760,10 +764,12 @@ spec:
                       interval:
                         description: Interval is the delay between poll iterations,
                           as a Go duration string (e.g. "5s"). Defaults to 5s.
+                        pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
                         type: string
                       timeout:
                         description: Timeout bounds the whole poll loop, as a Go duration
                           string (e.g. "30m"). Defaults to 30m.
+                        pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
                         type: string
                       url:
                         description: |-

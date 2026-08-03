@@ -42,10 +42,12 @@ type Polling struct {
 
 	// Timeout bounds the whole poll loop, as a Go duration string (e.g. "30m"). Defaults to 30m.
 	// +optional
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$`
 	Timeout *string `json:"timeout,omitempty"`
 
 	// Interval is the delay between poll iterations, as a Go duration string (e.g. "5s"). Defaults to 5s.
 	// +optional
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$`
 	Interval *string `json:"interval,omitempty"`
 }
 

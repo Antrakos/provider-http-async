@@ -41,6 +41,8 @@ type AsyncDisposableRequestParameters struct {
 	Body string `json:"body,omitempty"`
 
 	// WaitTimeout specifies the maximum time duration for waiting, as a Go duration string (e.g. "5m").
+	// +optional
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$`
 	WaitTimeout *string `json:"waitTimeout,omitempty"`
 
 	// RollbackRetriesLimit caps how many times the request is attempted; the first
@@ -85,6 +87,8 @@ type AsyncDisposableRequestParameters struct {
 	Polling *common.Polling `json:"polling,omitempty"`
 
 	// NextReconcile specifies the duration after which the next reconcile should occur, as a Go duration string (e.g. "1h").
+	// +optional
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$`
 	NextReconcile *string `json:"nextReconcile,omitempty"`
 
 	// ShouldLoopInfinitely specifies whether the reconciliation should loop indefinitely.
