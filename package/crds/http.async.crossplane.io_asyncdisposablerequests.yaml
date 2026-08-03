@@ -138,7 +138,8 @@ spec:
                       rule: self == oldSelf
                   nextReconcile:
                     description: NextReconcile specifies the duration after which
-                      the next reconcile should occur.
+                      the next reconcile should occur, as a Go duration string (e.g.
+                      "1h").
                     type: string
                   oidc:
                     description: |-
@@ -189,7 +190,7 @@ spec:
                       refreshBefore:
                         description: |-
                           RefreshBefore causes the provider to re-exchange the SA token this long before
-                          the cached token's exp claim. Defaults to 5m.
+                          the cached token's exp claim, as a Go duration string (e.g. "5m"). Defaults to 5m.
                         type: string
                       serviceAccountTokenPath:
                         description: |-
@@ -216,12 +217,12 @@ spec:
                           the resource condition.
                         type: string
                       interval:
-                        description: Interval is the delay between poll iterations.
-                          Defaults to 5s.
+                        description: Interval is the delay between poll iterations,
+                          as a Go duration string (e.g. "5s"). Defaults to 5s.
                         type: string
                       timeout:
-                        description: Timeout bounds the whole poll loop. Defaults
-                          to 30m.
+                        description: Timeout bounds the whole poll loop, as a Go duration
+                          string (e.g. "30m"). Defaults to 30m.
                         type: string
                       url:
                         description: |-
@@ -420,7 +421,7 @@ spec:
                       rule: self == oldSelf
                   waitTimeout:
                     description: WaitTimeout specifies the maximum time duration for
-                      waiting.
+                      waiting, as a Go duration string (e.g. "5m").
                     type: string
                 required:
                 - method

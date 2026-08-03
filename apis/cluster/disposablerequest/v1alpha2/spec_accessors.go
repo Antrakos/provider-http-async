@@ -17,8 +17,6 @@ limitations under the License.
 package v1alpha2
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"github.com/Antrakos/provider-http-async/apis/common"
 	"github.com/Antrakos/provider-http-async/apis/interfaces"
 )
@@ -33,7 +31,7 @@ var _ interfaces.ReconciliationPolicyAware = (*AsyncDisposableRequestParameters)
 var _ interfaces.RollbackAware = (*AsyncDisposableRequestParameters)(nil)
 
 // GetWaitTimeout returns the maximum time duration for waiting.
-func (d *AsyncDisposableRequestParameters) GetWaitTimeout() *metav1.Duration {
+func (d *AsyncDisposableRequestParameters) GetWaitTimeout() *string {
 	return d.WaitTimeout
 }
 
@@ -73,7 +71,7 @@ func (d *AsyncDisposableRequestParameters) GetExpectedResponse() string {
 }
 
 // GetNextReconcile returns the duration after which the next reconcile should occur.
-func (d *AsyncDisposableRequestParameters) GetNextReconcile() *metav1.Duration {
+func (d *AsyncDisposableRequestParameters) GetNextReconcile() *string {
 	return d.NextReconcile
 }
 

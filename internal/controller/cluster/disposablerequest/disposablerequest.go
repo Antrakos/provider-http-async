@@ -350,7 +350,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	if needsRetry {
 		if cr.Spec.ForProvider.NextReconcile != nil {
 			// Only retry if enough time has passed since last reconcile
-			nextReconcileDuration := cr.Spec.ForProvider.NextReconcile.Duration
+			nextReconcileDuration := common.ParseDuration(cr.Spec.ForProvider.NextReconcile, 0)
 			last := cr.Status.LastReconcileTime.Time
 			if last.IsZero() {
 				last = time.Now()
@@ -397,7 +397,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		c.logger.Debug("Response does not match expected criteria")
 		// Respect nextReconcile timing even for validation failures
 		if cr.Spec.ForProvider.NextReconcile != nil {
-			nextReconcileDuration := cr.Spec.ForProvider.NextReconcile.Duration
+			nextReconcileDuration := common.ParseDuration(cr.Spec.ForProvider.NextReconcile, 0)
 			last := cr.Status.LastReconcileTime.Time
 			if last.IsZero() {
 				last = time.Now()
@@ -421,7 +421,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 
 	// If nextReconcile is configured and no retry is pending, check if regular reconcile time has passed
 	if !needsRetry && cr.Spec.ForProvider.NextReconcile != nil {
-		nextReconcileDuration := cr.Spec.ForProvider.NextReconcile.Duration
+		nextReconcileDuration := common.ParseDuration(cr.Spec.ForProvider.NextReconcile, 0)
 		last := cr.Status.LastReconcileTime.Time
 		if last.IsZero() {
 			last = time.Now()
@@ -509,7 +509,7 @@ func customPollIntervalHook(mg resource.Managed, _ time.Duration) time.Duration 
 	}
 
 	// Calculate next reconcile time based on NextReconcile duration
-	nextReconcileDuration := cr.Spec.ForProvider.NextReconcile.Duration
+	nextReconcileDuration := common.ParseDuration(cr.Spec.ForProvider.NextReconcile, 0)
 	lastReconcileTime := cr.Status.LastReconcileTime.Time
 	if lastReconcileTime.IsZero() {
 		// Status update may not have propagated yet; consider last reconcile as now.

@@ -365,7 +365,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	isUpToDate := true
 	if needsRetry {
 		if cr.Spec.ForProvider.NextReconcile != nil {
-			nextReconcileDuration := cr.Spec.ForProvider.NextReconcile.Duration
+			nextReconcileDuration := common.ParseDuration(cr.Spec.ForProvider.NextReconcile, 0)
 			last := cr.Status.LastReconcileTime.Time
 			if last.IsZero() {
 				last = time.Now()
@@ -406,7 +406,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	if !isExpected {
 		c.logger.Debug("Response does not match expected criteria")
 		if cr.Spec.ForProvider.NextReconcile != nil {
-			nextReconcileDuration := cr.Spec.ForProvider.NextReconcile.Duration
+			nextReconcileDuration := common.ParseDuration(cr.Spec.ForProvider.NextReconcile, 0)
 			last := cr.Status.LastReconcileTime.Time
 			if last.IsZero() {
 				last = time.Now()
@@ -429,7 +429,7 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 	isUpToDate = disposablerequest.CalculateUpToDateStatus(crCtx, isUpToDate)
 
 	if !needsRetry && cr.Spec.ForProvider.NextReconcile != nil {
-		nextReconcileDuration := cr.Spec.ForProvider.NextReconcile.Duration
+		nextReconcileDuration := common.ParseDuration(cr.Spec.ForProvider.NextReconcile, 0)
 		last := cr.Status.LastReconcileTime.Time
 		if last.IsZero() {
 			last = time.Now()
@@ -513,7 +513,7 @@ func customPollIntervalHook(mg resource.Managed, _ time.Duration) time.Duration 
 		return defaultPollInterval
 	}
 
-	nextReconcileDuration := cr.Spec.ForProvider.NextReconcile.Duration
+	nextReconcileDuration := common.ParseDuration(cr.Spec.ForProvider.NextReconcile, 0)
 	lastReconcileTime := cr.Status.LastReconcileTime.Time
 	if lastReconcileTime.IsZero() {
 		lastReconcileTime = time.Now()

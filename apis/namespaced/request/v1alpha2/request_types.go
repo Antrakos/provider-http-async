@@ -56,8 +56,8 @@ type AsyncRequestParameters struct {
 	// Headers defines default headers for each request.
 	Headers map[string][]string `json:"headers,omitempty"`
 
-	// WaitTimeout specifies the maximum time duration for waiting.
-	WaitTimeout *metav1.Duration `json:"waitTimeout,omitempty"`
+	// WaitTimeout specifies the maximum time duration for waiting, as a Go duration string (e.g. "5m").
+	WaitTimeout *string `json:"waitTimeout,omitempty"`
 
 	// InsecureSkipTLSVerify, when set to true, skips TLS certificate checks for the HTTP request.
 	// This field is mutually exclusive with TLSConfig.

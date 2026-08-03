@@ -52,24 +52,18 @@ func (a *PollingAdapter) GetDone() string  { return a.p.Done }
 func (a *PollingAdapter) GetError() string { return a.p.Error }
 
 func (a *PollingAdapter) GetTimeout() time.Duration {
-	if a.p.Timeout != nil {
-		return a.p.Timeout.Duration
-	}
-	return common.DefaultPollTimeout
+	return common.ParseDuration(a.p.Timeout, common.DefaultPollTimeout)
 }
 
 func (a *PollingAdapter) GetInterval() time.Duration {
-	if a.p.Interval != nil {
-		return a.p.Interval.Duration
-	}
-	return common.DefaultPollInterval
+	return common.ParseDuration(a.p.Interval, common.DefaultPollInterval)
 }
 
 // HTTPRequestSpec defines the common interface for accessing HTTP request configuration.
 // This interface abstracts the differences between AsyncRequest and DisposableRequest types.
 type HTTPRequestSpec interface {
-	// GetWaitTimeout returns the maximum time duration for waiting.
-	GetWaitTimeout() *metav1.Duration
+	// GetWaitTimeout returns the maximum time duration for waiting, as a Go duration string.
+	GetWaitTimeout() *string
 
 	// GetInsecureSkipTLSVerify returns whether to skip TLS certificate verification.
 	GetInsecureSkipTLSVerify() bool
@@ -188,8 +182,8 @@ type ResponseCheck interface {
 // ReconciliationPolicyAware indicates that a spec supports custom reconciliation policies.
 // This is a v1alpha2 DisposableRequest-specific feature.
 type ReconciliationPolicyAware interface {
-	// GetNextReconcile returns the duration after which the next reconcile should occur.
-	GetNextReconcile() *metav1.Duration
+	// GetNextReconcile returns the duration after which the next reconcile should occur, as a Go duration string.
+	GetNextReconcile() *string
 
 	// GetShouldLoopInfinitely returns whether reconciliation should loop indefinitely.
 	GetShouldLoopInfinitely() bool

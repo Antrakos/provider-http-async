@@ -188,7 +188,7 @@ spec:
                   refreshBefore:
                     description: |-
                       RefreshBefore causes the provider to re-exchange the SA token this long before
-                      the cached token's exp claim. Defaults to 5m.
+                      the cached token's exp claim, as a Go duration string (e.g. "5m"). Defaults to 5m.
                     type: string
                   serviceAccountTokenPath:
                     description: |-

@@ -48,9 +48,14 @@ func terminalErrorServer(t *testing.T) *httptest.Server {
 	}))
 }
 
+// durStr returns a pointer to the Go duration string for d, matching the plain-string
+// Polling.Timeout/Interval field type (no more metav1.Duration canonicalization).
+func durStr(d time.Duration) *string {
+	s := d.String()
+	return &s
+}
+
 func buildMapping(srv *httptest.Server) *clusterv1alpha2.Mapping {
-	interval := metav1.Duration{Duration: 1 * time.Millisecond}
-	timeout := metav1.Duration{Duration: 30 * time.Minute}
 	return &clusterv1alpha2.Mapping{
 		Method: "POST",
 		Action: common.ActionCreate,
@@ -59,8 +64,8 @@ func buildMapping(srv *httptest.Server) *clusterv1alpha2.Mapping {
 			URL:      fmt.Sprintf(`"%s"`, srv.URL),
 			Done:     ".poll.response.body.done == true",
 			Error:    ".poll.response.body.error",
-			Interval: &interval,
-			Timeout:  &timeout,
+			Interval: durStr(1 * time.Millisecond),
+			Timeout:  durStr(30 * time.Minute),
 		},
 	}
 }
@@ -268,8 +273,8 @@ func TestPoll_Resume_RecomputesURL(t *testing.T) {
 				// jq: "<srv.URL>" + "/" + .response.body.name
 				URL:      fmt.Sprintf(`"%s" + "/" + .response.body.name`, srv.URL),
 				Done:     ".poll.response.body.done == true",
-				Interval: &metav1.Duration{Duration: 1 * time.Millisecond},
-				Timeout:  &metav1.Duration{Duration: 30 * time.Minute},
+				Interval: durStr(1 * time.Millisecond),
+				Timeout:  durStr(30 * time.Minute),
 			},
 		}},
 	}
@@ -307,8 +312,8 @@ func TestPoll_Timeout(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	shortTimeout := metav1.Duration{Duration: 50 * time.Millisecond}
-	shortInterval := metav1.Duration{Duration: 10 * time.Millisecond}
+	shortTimeout := durStr(50 * time.Millisecond)
+	shortInterval := durStr(10 * time.Millisecond)
 	mapping := &clusterv1alpha2.Mapping{
 		Method: "POST",
 		Action: common.ActionCreate,
@@ -316,8 +321,8 @@ func TestPoll_Timeout(t *testing.T) {
 		Polling: &common.Polling{
 			URL:      fmt.Sprintf(`"%s"`, srv.URL),
 			Done:     ".poll.response.body.done == true",
-			Timeout:  &shortTimeout,
-			Interval: &shortInterval,
+			Timeout:  shortTimeout,
+			Interval: shortInterval,
 		},
 	}
 
@@ -347,8 +352,6 @@ func TestPoll_Timeout(t *testing.T) {
 // scheme-less path (the common GCP LRO misconfiguration) is reported as a terminal
 // failure with an actionable message, and that no poll GET is attempted.
 func TestPoll_BarePathURL_TerminalError(t *testing.T) {
-	interval := metav1.Duration{Duration: 1 * time.Millisecond}
-	timeout := metav1.Duration{Duration: 30 * time.Minute}
 	mapping := &clusterv1alpha2.Mapping{
 		Method: "POST",
 		Action: common.ActionCreate,
@@ -357,8 +360,8 @@ func TestPoll_BarePathURL_TerminalError(t *testing.T) {
 			// jq expression that yields a bare GCP resource path (no scheme).
 			URL:      `.response.body.name`,
 			Done:     ".poll.response.body.done == true",
-			Interval: &interval,
-			Timeout:  &timeout,
+			Interval: durStr(1 * time.Millisecond),
+			Timeout:  durStr(30 * time.Minute),
 		},
 	}
 
@@ -398,8 +401,6 @@ func TestPoll_BarePathURL_TerminalError(t *testing.T) {
 // carries no LRO identifier) is reported as a terminal failure steering the user to
 // remove the polling block.
 func TestPoll_EmptyURL_SyncOpTerminalError(t *testing.T) {
-	interval := metav1.Duration{Duration: 1 * time.Millisecond}
-	timeout := metav1.Duration{Duration: 30 * time.Minute}
 	mapping := &clusterv1alpha2.Mapping{
 		Method: "POST",
 		Action: common.ActionCreate,
@@ -408,8 +409,8 @@ func TestPoll_EmptyURL_SyncOpTerminalError(t *testing.T) {
 			// A synchronous response has no operation name, so this yields empty.
 			URL:      `(.response.body.name // "")`,
 			Done:     ".poll.response.body.done == true",
-			Interval: &interval,
-			Timeout:  &timeout,
+			Interval: durStr(1 * time.Millisecond),
+			Timeout:  durStr(30 * time.Minute),
 		},
 	}
 
@@ -484,8 +485,9 @@ func TestPoll_Timeout_CrossReconcile(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	timeout := metav1.Duration{Duration: 30 * time.Second}
-	interval := metav1.Duration{Duration: 1 * time.Millisecond}
+	timeoutDuration := 30 * time.Second
+	timeout := durStr(timeoutDuration)
+	interval := durStr(1 * time.Millisecond)
 	mapping := &clusterv1alpha2.Mapping{
 		Method: "POST",
 		Action: common.ActionCreate,
@@ -493,13 +495,13 @@ func TestPoll_Timeout_CrossReconcile(t *testing.T) {
 		Polling: &common.Polling{
 			URL:      fmt.Sprintf(`"%s"`, srv.URL),
 			Done:     ".poll.response.body.done == true",
-			Timeout:  &timeout,
-			Interval: &interval,
+			Timeout:  timeout,
+			Interval: interval,
 		},
 	}
 
 	// Simulate a CR that started polling more than timeout ago.
-	startedAt := metav1.NewTime(time.Now().Add(-(timeout.Duration + time.Second)))
+	startedAt := metav1.NewTime(time.Now().Add(-(timeoutDuration + time.Second)))
 	cr := &clusterv1alpha2.AsyncRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-timeout-cross", Namespace: "default"},
 	}

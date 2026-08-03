@@ -1171,8 +1171,8 @@ func TestDeleteAsyncChain(t *testing.T) {
 			cr.Status.ExternalRef = "models/my-model"
 			cr.Finalizers = []string{"finalizer.managedresource.crossplane.io"}
 			// Add a REMOVE mapping so DeployAction can find it.
-			interval := metav1.Duration{Duration: 100 * time.Millisecond}
-			timeout := metav1.Duration{Duration: 5 * time.Second}
+			interval := (100 * time.Millisecond).String()
+			timeout := (5 * time.Second).String()
 			cr.Spec.ForProvider.Mappings = append(cr.Spec.ForProvider.Mappings, v1alpha2.Mapping{
 				Method: "DELETE",
 				Action: "REMOVE",

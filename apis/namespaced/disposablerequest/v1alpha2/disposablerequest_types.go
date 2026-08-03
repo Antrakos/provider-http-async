@@ -40,8 +40,8 @@ type AsyncDisposableRequestParameters struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Field 'forProvider.body' is immutable"
 	Body string `json:"body,omitempty"`
 
-	// WaitTimeout specifies the maximum time duration for waiting.
-	WaitTimeout *metav1.Duration `json:"waitTimeout,omitempty"`
+	// WaitTimeout specifies the maximum time duration for waiting, as a Go duration string (e.g. "5m").
+	WaitTimeout *string `json:"waitTimeout,omitempty"`
 
 	// RollbackRetriesLimit caps how many times the request is attempted; the first
 	// attempt counts, so set it to 1 for a strict one-off (fire once, and on failure
@@ -84,8 +84,8 @@ type AsyncDisposableRequestParameters struct {
 	// +optional
 	Polling *common.Polling `json:"polling,omitempty"`
 
-	// NextReconcile specifies the duration after which the next reconcile should occur.
-	NextReconcile *metav1.Duration `json:"nextReconcile,omitempty"`
+	// NextReconcile specifies the duration after which the next reconcile should occur, as a Go duration string (e.g. "1h").
+	NextReconcile *string `json:"nextReconcile,omitempty"`
 
 	// ShouldLoopInfinitely specifies whether the reconciliation should loop indefinitely.
 	ShouldLoopInfinitely bool `json:"shouldLoopInfinitely,omitempty"`

@@ -10,7 +10,6 @@ package v1alpha2
 
 import (
 	"github.com/Antrakos/provider-http-async/apis/common"
-	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -102,7 +101,7 @@ func (in *AsyncRequestParameters) DeepCopyInto(out *AsyncRequestParameters) {
 	}
 	if in.WaitTimeout != nil {
 		in, out := &in.WaitTimeout, &out.WaitTimeout
-		*out = new(v1.Duration)
+		*out = new(string)
 		**out = **in
 	}
 	if in.TLSConfig != nil {

@@ -42,10 +42,7 @@ import (
 // httpClient may be nil; http.DefaultClient is used only as a last resort — callers
 // should pass a client with an appropriate timeout and TLS configuration.
 func New(cfg *common.OIDCConfig, httpClient *http.Client) oauth2.TokenSource {
-	refreshBefore := common.DefaultOIDCRefreshBefore
-	if cfg.RefreshBefore != nil {
-		refreshBefore = cfg.RefreshBefore.Duration
-	}
+	refreshBefore := common.ParseDuration(cfg.RefreshBefore, common.DefaultOIDCRefreshBefore)
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}

@@ -25,8 +25,6 @@ import (
 	"testing"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"github.com/Antrakos/provider-http-async/apis/common"
 )
 
@@ -162,13 +160,14 @@ func TestNew_RefreshBefore_FallbackExpiry(t *testing.T) {
 	defer srv.Close()
 
 	rb := 10 * time.Minute
+	rbStr := rb.String()
 	cfg := &common.OIDCConfig{
 		ServiceAccountTokenPath: saPath,
 		Exchange: &common.OIDCExchange{
 			TokenEndpoint: srv.URL,
 			Audience:      "aud",
 		},
-		RefreshBefore: &metav1.Duration{Duration: rb},
+		RefreshBefore: &rbStr,
 	}
 	tok, err := New(cfg, nil).Token()
 	if err != nil {

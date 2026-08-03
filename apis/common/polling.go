@@ -19,7 +19,6 @@ package common
 import (
 	"encoding/json"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -41,13 +40,13 @@ type Polling struct {
 	// +optional
 	Error string `json:"error,omitempty"`
 
-	// Timeout bounds the whole poll loop. Defaults to 30m.
+	// Timeout bounds the whole poll loop, as a Go duration string (e.g. "30m"). Defaults to 30m.
 	// +optional
-	Timeout *metav1.Duration `json:"timeout,omitempty"`
+	Timeout *string `json:"timeout,omitempty"`
 
-	// Interval is the delay between poll iterations. Defaults to 5s.
+	// Interval is the delay between poll iterations, as a Go duration string (e.g. "5s"). Defaults to 5s.
 	// +optional
-	Interval *metav1.Duration `json:"interval,omitempty"`
+	Interval *string `json:"interval,omitempty"`
 }
 
 // RawExtensionToMap deserializes a runtime.RawExtension holding a JSON object into the

@@ -5,12 +5,13 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var limit int32 = 3
 var failures int32 = 2
-var testTimeout = &v1.Duration{Duration: 5 * time.Second}
+var testTimeoutStr = "5s"
+var testTimeout = &testTimeoutStr
+var testTimeoutDuration = 5 * time.Second
 
 func Test_ShouldRetry(t *testing.T) {
 	type args struct {
@@ -151,7 +152,7 @@ func Test_RollBackEnabled(t *testing.T) {
 
 func Test_WaitTimeout(t *testing.T) {
 	type args struct {
-		timeout *v1.Duration
+		timeout *string
 	}
 	type want struct {
 		result time.Duration
@@ -165,7 +166,7 @@ func Test_WaitTimeout(t *testing.T) {
 				timeout: testTimeout,
 			},
 			want: want{
-				result: testTimeout.Duration,
+				result: testTimeoutDuration,
 			},
 		},
 		"ResultFalse": {

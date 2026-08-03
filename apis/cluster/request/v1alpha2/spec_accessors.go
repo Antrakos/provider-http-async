@@ -30,7 +30,7 @@ var _ interfaces.MappedHTTPRequestSpec = (*AsyncRequestParameters)(nil)
 var _ interfaces.ResponseCheckAware = (*AsyncRequestParameters)(nil)
 
 // GetWaitTimeout returns the maximum time duration for waiting.
-func (r *AsyncRequestParameters) GetWaitTimeout() *metav1.Duration {
+func (r *AsyncRequestParameters) GetWaitTimeout() *string {
 	return r.WaitTimeout
 }
 

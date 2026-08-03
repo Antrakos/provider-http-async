@@ -18,8 +18,6 @@ package common
 
 import (
 	"time"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
@@ -51,9 +49,9 @@ type OIDCConfig struct {
 	Inject *OIDCInject `json:"inject,omitempty"`
 
 	// RefreshBefore causes the provider to re-exchange the SA token this long before
-	// the cached token's exp claim. Defaults to 5m.
+	// the cached token's exp claim, as a Go duration string (e.g. "5m"). Defaults to 5m.
 	// +optional
-	RefreshBefore *metav1.Duration `json:"refreshBefore,omitempty"`
+	RefreshBefore *string `json:"refreshBefore,omitempty"`
 }
 
 // OIDCExchange configures an RFC 8693 token exchange endpoint.

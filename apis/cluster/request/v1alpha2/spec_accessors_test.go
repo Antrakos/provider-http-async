@@ -2,16 +2,15 @@ package v1alpha2
 
 import (
 	"testing"
-	"time"
 
 	"github.com/google/go-cmp/cmp"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/Antrakos/provider-http-async/apis/common"
 )
 
 func TestRequestParameters_Accessors(t *testing.T) {
-	timeout := &metav1.Duration{Duration: 5 * time.Minute}
+	timeoutStr := "5m0s"
+	timeout := &timeoutStr
 	headers := map[string][]string{
 		"Content-Type": {"application/json"},
 	}
