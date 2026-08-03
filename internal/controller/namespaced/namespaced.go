@@ -22,9 +22,11 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	namespaceddisposablerequestv1alpha2 "github.com/Antrakos/provider-http-async/apis/namespaced/disposablerequest/v1alpha2"
 	namespacedrequestv1alpha2 "github.com/Antrakos/provider-http-async/apis/namespaced/request/v1alpha2"
 	namespacedv1alpha2 "github.com/Antrakos/provider-http-async/apis/namespaced/v1alpha2"
 	"github.com/Antrakos/provider-http-async/internal/controller/namespaced/config"
+	"github.com/Antrakos/provider-http-async/internal/controller/namespaced/disposablerequest"
 	"github.com/Antrakos/provider-http-async/internal/controller/namespaced/request"
 )
 
@@ -35,6 +37,7 @@ func Setup(mgr ctrl.Manager, o controller.Options, timeout time.Duration) error 
 		config.Setup,
 		config.SetupCluster,
 		request.Setup,
+		disposablerequest.Setup,
 	} {
 		if err := setup(mgr, o, timeout); err != nil {
 			return err
@@ -62,6 +65,12 @@ func SetupGated(mgr ctrl.Manager, o controller.Options, timeout time.Duration) e
 			panic(err)
 		}
 	}, namespacedrequestv1alpha2.RequestGroupVersionKind)
+
+	o.Gate.Register(func() {
+		if err := disposablerequest.Setup(mgr, o, timeout); err != nil {
+			panic(err)
+		}
+	}, namespaceddisposablerequestv1alpha2.AsyncDisposableRequestGroupVersionKind)
 
 	return nil
 }

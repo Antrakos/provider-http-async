@@ -22,9 +22,11 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	clusterdisposablerequestv1alpha2 "github.com/Antrakos/provider-http-async/apis/cluster/disposablerequest/v1alpha2"
 	clusterrequestv1alpha2 "github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
 	httpv1alpha1 "github.com/Antrakos/provider-http-async/apis/cluster/v1alpha1"
 	"github.com/Antrakos/provider-http-async/internal/controller/cluster/config"
+	"github.com/Antrakos/provider-http-async/internal/controller/cluster/disposablerequest"
 	"github.com/Antrakos/provider-http-async/internal/controller/cluster/request"
 )
 
@@ -34,6 +36,7 @@ func Setup(mgr ctrl.Manager, o controller.Options, timeout time.Duration) error 
 	for _, setup := range []func(ctrl.Manager, controller.Options, time.Duration) error{
 		config.Setup,
 		request.Setup,
+		disposablerequest.Setup,
 	} {
 		if err := setup(mgr, o, timeout); err != nil {
 			return err
@@ -55,6 +58,12 @@ func SetupGated(mgr ctrl.Manager, o controller.Options, timeout time.Duration) e
 			panic(err)
 		}
 	}, clusterrequestv1alpha2.RequestGroupVersionKind)
+
+	o.Gate.Register(func() {
+		if err := disposablerequest.Setup(mgr, o, timeout); err != nil {
+			panic(err)
+		}
+	}, clusterdisposablerequestv1alpha2.AsyncDisposableRequestGroupVersionKind)
 
 	return nil
 }

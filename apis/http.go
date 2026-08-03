@@ -20,8 +20,10 @@ package apis
 import (
 	"k8s.io/apimachinery/pkg/runtime"
 
+	clusterdisposablerequestv1alpha2 "github.com/Antrakos/provider-http-async/apis/cluster/disposablerequest/v1alpha2"
 	clusterrequestv1alpha2 "github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
 	clusterhttpv1alpha1 "github.com/Antrakos/provider-http-async/apis/cluster/v1alpha1"
+	namespaceddisposablerequestv1alpha2 "github.com/Antrakos/provider-http-async/apis/namespaced/disposablerequest/v1alpha2"
 	namespacedrequestv1alpha2 "github.com/Antrakos/provider-http-async/apis/namespaced/request/v1alpha2"
 	namespacedhtpv1alpha2 "github.com/Antrakos/provider-http-async/apis/namespaced/v1alpha2"
 )
@@ -32,9 +34,11 @@ func init() {
 		// Cluster-scoped APIs
 		clusterhttpv1alpha1.SchemeBuilder.AddToScheme,
 		clusterrequestv1alpha2.SchemeBuilder.AddToScheme,
+		clusterdisposablerequestv1alpha2.SchemeBuilder.AddToScheme,
 		// Namespaced APIs
 		namespacedhtpv1alpha2.SchemeBuilder.AddToScheme,
 		namespacedrequestv1alpha2.SchemeBuilder.AddToScheme,
+		namespaceddisposablerequestv1alpha2.SchemeBuilder.AddToScheme,
 	)
 }
 

@@ -1,0 +1,55 @@
+# AsyncDisposableRequest: deploy a Vertex AI model to an existing endpoint as a
+# one-off long-running operation. Unlike AsyncRequest, a disposable request is
+# fire-and-forget: it POSTs :deployModel once, polls the returned operation to
+# completion (done/error), and then stops reconciling. There is no
+# OBSERVE/UPDATE/DELETE lifecycle and no terminalError classification — a one-off
+# has nothing to keep in sync.
+#
+# polling.url prepends the full base URL because the operation `name` is returned
+# as a bare resource path.
+apiVersion: http.async.m.crossplane.io/v1alpha2
+kind: AsyncDisposableRequest
+metadata:
+  name: vertex-deploy-model
+  namespace: common
+spec:
+  providerConfigRef:
+    name: gcp
+    kind: ClusterProviderConfig
+  forProvider:
+    method: POST
+    url: https://us-central1-aiplatform.googleapis.com/v1beta1/projects/pb-ai-enablement-dev/locations/us-central1/endpoints/1361569778895945728:deployModel
+    body: |
+      {
+        "deployedModel": {
+          "model": "projects/pb-ai-enablement-dev/locations/us-central1/models/4952042591584518144",
+          "displayName": "qwen3-6-27b-exp",
+          "enableContainerLogging": false,
+          "dedicatedResources": {
+            "machineSpec": {
+              "machineType": "g4-standard-48",
+              "acceleratorType": "NVIDIA_RTX_PRO_6000",
+              "acceleratorCount": 1
+            },
+            "minReplicaCount": 0,
+            "maxReplicaCount": 2,
+            "spot": true,
+            "scaleToZeroSpec": {
+              "idleScaledownPeriod": "600s"
+            }
+          }
+        }
+      }
+    # Drive the long-running deployModel operation to completion.
+    polling:
+      url: '"https://us-central1-aiplatform.googleapis.com/v1beta1/" + .response.body.name'
+      done: .poll.response.body.done == true
+      error: .poll.response.body.error
+      timeout: 60m
+      interval: 30s
+    # Validate the completed operation actually produced a deployedModel id. The full
+    # poll response is stored in status.response for a Composition to patch from.
+    expectedResponse: .body.response.deployedModel.id != null
+    # Strict one-off: attempt exactly once. On failure the resource stops and surfaces
+    # ErrorObserved instead of re-issuing deployModel. Leave unset to retry forever; 0 is rejected.
+    rollbackRetriesLimit: 1

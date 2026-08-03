@@ -1,0 +1,26 @@
+# AsyncDisposableRequest: a plain one-off HTTP request (no polling). It fires the
+# request once, validates the response with expectedResponse, optionally retries
+# per rollbackRetriesLimit, then stops. Useful for triggering webhooks, kicking off
+# a job, or acquiring a token.
+apiVersion: http.async.m.crossplane.io/v1alpha2
+kind: AsyncDisposableRequest
+metadata:
+  name: sample-disposable-request
+  namespace: default
+spec:
+  providerConfigRef:
+    name: default
+    kind: ClusterProviderConfig
+  forProvider:
+    method: POST
+    url: https://api.example.com/v1/jobs
+    headers:
+      Content-Type:
+        - application/json
+    body: |
+      {"action": "start", "target": "nightly-report"}
+    # The request is considered successful only when the response reports accepted.
+    expectedResponse: .body.status == "accepted"
+    # Attempt at most 3 times before giving up. Set to 1 for a strict one-off; leave
+    # unset to retry forever until the response matches. 0 is rejected.
+    rollbackRetriesLimit: 3

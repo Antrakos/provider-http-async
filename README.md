@@ -416,8 +416,53 @@ See [`examples/namespaced/`](./examples/namespaced/) and [`examples/cluster/`](.
 - `vertex-providerconfig.yaml` — OIDC Workload Identity Federation config for GCP
 - `vertex-model-import.yaml` — adopting an existing model via `external-name`
 - `plain-sync.yaml` — plain synchronous example (no polling, no OIDC)
+- `disposablerequest.yaml` — plain one-off `AsyncDisposableRequest`
+- `disposablerequest-vertex-deploy-model.yaml` — one-off Vertex AI `deployModel` with polling
+
+## AsyncDisposableRequest
+
+`AsyncDisposableRequest` is a **one-off** managed resource: it sends a single HTTP
+request, optionally drives and polls a long-running operation (LRO) to completion,
+and then stops. It is the async counterpart of provider-http's `DisposableRequest`
+— fire-and-forget rather than a continuously-reconciled resource.
+
+Unlike `AsyncRequest`, a disposable request has **no OBSERVE/UPDATE/DELETE lifecycle**
+and **no `terminalError` classification**: once the request (and its LRO, if any)
+reaches a terminal state — success or error — there is nothing left to keep in sync,
+so the resource stops taking action.
+
+Cluster group: `http.async.crossplane.io`. Namespaced group: `http.async.m.crossplane.io`.
+Version: `v1alpha2`.
+
+### Key fields
+
+| Field | Purpose |
+|---|---|
+| `url`, `method`, `headers`, `body` | The single request to send (immutable). |
+| `expectedResponse` | jq boolean validating success. Evaluated against the **final poll response** when `polling` is set, otherwise against the request response. |
+| `polling` | Turns the request into an LRO driver: `url` (jq → operation URL, keyed off `.response`), `done`, `error`, `timeout` (default 30m), `interval` (default 5s). |
+| `rollbackRetriesLimit` | Caps how many times the request is attempted; the first attempt counts. **`1` = strict one-off** (fire once; on failure stop and surface `ErrorObserved`). **Unset = retry until the response matches.** `0` is rejected (it would stop the request from ever firing). |
+| `nextReconcile`, `shouldLoopInfinitely` | Optional recurring / perpetual reconciliation. |
+| `gcp`, `oidc`, `tlsConfig`, `insecureSkipTLSVerify` | Same auth/TLS options as `AsyncRequest`. |
+
+### Polling lifecycle
+
+1. The request fires once; its response is persisted as the crash-recovery anchor
+   (`status.polling.response`).
+2. Each reconcile recomputes `polling.url` from the anchor and polls until
+   `polling.done` is true (bounded by `polling.timeout`), resuming across reconciles
+   without re-firing the request.
+3. On **success** the final poll response is validated against `expectedResponse`,
+   secret injections are applied, the full poll response is stored in
+   `status.response` (for a Composition to patch from), and the resource is marked
+   synced — it stops reconciling.
+4. On **operation error** (`polling.error` non-null) the failure is recorded via the
+   resource's error tracking and follows the `rollbackRetriesLimit` policy. With
+   `rollbackRetriesLimit: 1` the operation is not re-issued; with it unset the request
+   re-fires until it succeeds.
 
 ## Local Development
+
 
 ### Prerequisites
 

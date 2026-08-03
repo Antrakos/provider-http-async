@@ -64,6 +64,20 @@ func RawExtensionToMap(ext *runtime.RawExtension) map[string]interface{} {
 	return m
 }
 
+// MapToRawExtension serializes a JSON object map into a runtime.RawExtension for
+// persisting the poll anchor in status. It returns nil when m is nil (the "clear the
+// anchor" case) or on a marshal error.
+func MapToRawExtension(m map[string]interface{}) *runtime.RawExtension {
+	if m == nil {
+		return nil
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return nil
+	}
+	return &runtime.RawExtension{Raw: raw}
+}
+
 // StructToMap serializes any JSON-marshalable value to a JSON-compatible map, so jq
 // expressions can key off the whole struct (e.g. the full status). It lives here rather
 // than in internal/json to avoid a test-build import cycle (internal/json's tests import
