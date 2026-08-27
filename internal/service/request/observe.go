@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -118,6 +119,33 @@ func IsUpToDate(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext)
 	// detected via generation drift. This is the "stalled, needs human intervention"
 	// pattern; the resource remains visible and is marked unhealthy via conditions.
 	if terminalErr := status.GetTerminalError(); terminalErr != "" {
+		// Deletion requested while in a terminal failure state. Two shapes, distinguished by
+		// whether the polling anchor (status.polling.response) was cleared:
+		//   - Anchor nil AND externalRef empty: the terminal cause confirmed nothing was created —
+		//     an operation-failure terminal (polling.error) on a CREATE+poll cleared the anchor
+		//     (SetTerminalFailure clearAnchor=true), or a mutate failure never set one. Safe to
+		//     abandon: report not-existing so the reconciler skips its delete branch and finalizes,
+		//     dropping the finalizer. Without this guard the terminal short-circuit below returns a
+		//     terminal observation as a Go error; during deletion the managed reconciler
+		//     (reconciler.go:1179) bails on that error before reaching its WasDeleted delete branch
+		//     (reconciler.go:1225), so the finalizer is never removed and the resource stalls
+		//     Terminating over a resource that was never created.
+		//   - Anchor nil but externalRef set: the terminal occurred on an EXISTING resource (an
+		//     operation-failure terminal during an UPDATE/REMOVE LRO, a non-polling mutate
+		//     terminal, or a missing-UPDATE-mapping stuck state). Do NOT abandon — that would
+		//     orphan the real cloud resource. Fall through to NewTerminalObserve so the operator
+		//     intervenes, or to the in-flight/Delete path if a later spec change cleared it.
+		//   - Anchor retained: the terminal cause left the server-side LRO state UNKNOWN — a
+		//     polling.timeout or a bad/empty polling.url (SetTerminalFailure clearAnchor=false).
+		//     The LRO may still create something, and the retained anchor holds the operation URL.
+		//     Stall visibly (fall through to NewTerminalObserve below) until an operator removes
+		//     the finalizer or fixes the spec — do NOT abandon, which could orphan a resource that
+		//     succeeds after we stop watching.
+		if meta.WasDeleted(crCtx.GetCR()) &&
+			status.GetPollingResponse() == nil &&
+			status.GetExternalRefValue() == "" {
+			return FailedObserve(), errors.New(observe.ErrObjectNotFound)
+		}
 		if status.GetGeneration() == status.GetObservedGeneration() {
 			return NewTerminalObserve(terminalErr), nil
 		}
@@ -132,6 +160,24 @@ func IsUpToDate(svcCtx *service.ServiceContext, crCtx *service.RequestCRContext)
 		// LRO in flight — do not trigger an OBSERVE call; externalRef may be empty. Route the
 		// resume back to DeployAction.
 		if status.GetExternalRefValue() == "" {
+			if meta.WasDeleted(crCtx.GetCR()) {
+				// Deletion requested while a CREATE+poll LRO is still in flight (anchor set,
+				// externalRef not yet written — it is populated only on poll completion). The
+				// normal CREATE-resume route returns ErrObjectNotFound, which on a deletion
+				// reconcile makes the managed reconciler drop the finalizer immediately and
+				// orphan the in-flight cloud operation. Instead report the resource as existing
+				// so the reconciler enters its delete branch and calls Delete(); Delete() detects
+				// this in-flight-CREATE shape and resumes the CREATE poll (via the CREATE
+				// mapping's polling block, not REMOVE) until the LRO completes. On completion
+				// externalRef is populated and the next reconcile's Observe routes here again —
+				// this time externalRef is set, so NewInFlightObserve holds the finalizer for a
+				// Delete() that fires REMOVE against the now-resolvable URL. Awaiting is bounded
+				// by polling.timeout; if the resumed poll fails terminally, the terminal
+				// short-circuit above decides abandon-vs-stall based on the anchor and externalRef
+				// (nothing-created terminals abandon and drop the finalizer; unknown-state
+				// terminals — timeout / bad polling.url — stall visibly with the anchor retained).
+				return NewInFlightObserve(), nil
+			}
 			// No externalRef yet: the CREATE+poll operation is still running. Report the
 			// resource as not-existing so the controller calls Create() (the CREATE mapping
 			// always exists for a pollable resource) and resumes the poll via the anchor.

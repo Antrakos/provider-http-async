@@ -528,6 +528,85 @@ func TestPoll_Timeout_CrossReconcile(t *testing.T) {
 	}
 }
 
+// TestPoll_TimeoutDuringDeletion_NoTerminal pins the delete-during-create-poll timeout gate.
+// During deletion the overall polling.timeout is suppressed: even with an already-elapsed
+// deadline, the poller must keep issuing poll GETs (bounded per reconcile by the foreground
+// budget) and must NOT return a TerminalErr — a timeout terminal would be recorded by
+// DeployAction as SetTerminalFailure(clearAnchor=false), and IsUpToDate's terminal short-circuit
+// would then stall the finalizer forever (the reconciler bails on the terminal error before its
+// delete branch). Contrast TestPoll_Timeout_CrossReconcile above, which (no deletion) returns the
+// terminal with zero GETs. A cancellable context bounds the loop here so the test doesn't wait the
+// full 2m budget; the cancellation surfaces as a Go context error, which is acceptable — the
+// assertion under test is that TerminalErr stays empty and GETs fire.
+func TestPoll_TimeoutDuringDeletion_NoTerminal(t *testing.T) {
+	// Server never reports done; track calls to prove the loop actually polls.
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		resp := map[string]interface{}{"done": false}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	timeoutDuration := 30 * time.Second
+	mapping := &clusterv1alpha2.Mapping{
+		Method: "POST",
+		Action: common.ActionCreate,
+		URL:    ".payload.baseUrl",
+		Polling: &common.Polling{
+			URL:      fmt.Sprintf(`"%s"`, srv.URL),
+			Done:     ".poll.response.body.done == true",
+			Timeout:  durStr(timeoutDuration),
+			Interval: durStr(1 * time.Millisecond),
+		},
+	}
+
+	// Deadline already expired (started > timeout ago) AND deletion requested.
+	now := metav1.Now()
+	startedAt := metav1.NewTime(now.Add(-(timeoutDuration + time.Second)))
+	cr := &clusterv1alpha2.AsyncRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "test-timeout-delete",
+			Namespace:         "default",
+			DeletionTimestamp: &now,
+			Finalizers:        []string{"finalizer"}, // WasDeleted is true once DeletionTimestamp is set
+		},
+	}
+	cr.Spec.ForProvider = clusterv1alpha2.AsyncRequestParameters{
+		Payload:  clusterv1alpha2.Payload{BaseUrl: "https://example.com"},
+		Mappings: []clusterv1alpha2.Mapping{*mapping},
+	}
+	cr.Status.Polling.StartedAt = &startedAt
+
+	kube := buildFakeKube(cr)
+	// Cancellable context bounds the loop so the test returns promptly instead of running the
+	// full 2m per-reconcile budget.
+	ctx, cancel := context.WithCancel(context.Background())
+	svcCtx := service.NewServiceContext(ctx, kube, logging.NewNopLogger(), buildHTTPClient(t), nil)
+	crCtx := buildCRCtx(cr)
+
+	// Cancel after the loop has had time to issue a few GETs.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	p := New()
+	result, err := p.Poll(svcCtx, crCtx, mapping, nil)
+	if result.TerminalErr != "" {
+		t.Errorf("expected NO terminal during deletion despite the expired deadline (timeout must be suppressed), got %q", result.TerminalErr)
+	}
+	if calls == 0 {
+		t.Error("expected poll GETs to be issued during deletion past the deadline (gate must not short-circuit before polling); got zero calls")
+	}
+	// A context-cancellation error is expected and fine; the point is that the loop polled rather
+	// than terminaling out.
+	if err == nil {
+		t.Error("expected the context cancellation to surface as a Go error once the loop is bounded; got nil")
+	}
+}
+
 // TestSetTerminalFailure_RetainsAnchor verifies the clearAnchor=false policy (timeout /
 // bad-polling.url terminal): SetTerminalFailure must PRESERVE the polling.response anchor
 // (and StartedAt) so a corrected spec resumes the in-flight operation instead of re-creating

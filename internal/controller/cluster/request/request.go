@@ -363,6 +363,24 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) (managed.Ext
 
 	svcCtx := service.NewServiceContext(ctx, c.localKube, c.logger, c.http, c.tlsConfigData)
 	crCtx := service.NewRequestCRContext(cr)
+
+	// A CREATE long-running operation may still be in flight when deletion is requested: the
+	// poll anchor (status.polling.response) is set but externalRef is not yet populated (it is
+	// written only on poll completion). The REMOVE mapping's URL resolves via .status.externalRef,
+	// so firing it now would target an empty/invalid URL. Resume the CREATE poll first — using
+	// the CREATE mapping's polling block, not REMOVE — until the LRO completes. On completion
+	// externalRef is populated and the anchor is cleared; the reconciler requeues with the
+	// finalizer retained, and the next reconcile's Observe routes back here to fire REMOVE against
+	// the now-resolvable URL. Awaiting is bounded by polling.timeout. If the resumed poll fails
+	// terminally, IsUpToDate's terminal short-circuit decides abandon-vs-stall: a nothing-created
+	// terminal (operation failure, anchor cleared, externalRef empty) drops the finalizer; an
+	// unknown-state terminal (timeout / bad polling.url, anchor retained) stalls visibly with the
+	// finalizer held so an operator can investigate. Returning nil here (budget-expiry mid-poll)
+	// requeues with the finalizer retained.
+	if crCtx.Status().GetPollingResponse() != nil && crCtx.Status().GetExternalRefValue() == "" {
+		return managed.ExternalDelete{}, errors.Wrap(request.DeployAction(svcCtx, crCtx, v1alpha2.ActionCreate), errFailedToSendHttpRequest)
+	}
+
 	return managed.ExternalDelete{}, errors.Wrap(request.DeployAction(svcCtx, crCtx, v1alpha2.ActionRemove), errFailedToSendHttpRequest)
 }
 

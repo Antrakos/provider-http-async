@@ -965,6 +965,176 @@ func TestDeployAction_OrphanRecovery_NoDuplicate(t *testing.T) {
 	}
 }
 
+// TestDeployAction_DeleteDuringCreatePoll_ResumesCreatePoll covers the delete-during-create-poll
+// fix: when deletion is requested while a CREATE+poll LRO is in flight (anchor set, externalRef
+// still empty), Delete() must resume the CREATE poll rather than fire REMOVE against an
+// unresolvable URL. DeployAction(svcCtx, crCtx, "CREATE") with a persisted anchor is exactly that
+// resume. The cycle:
+//  1. Anchor persisted (simulate a prior CREATE POST + first poll budget expiry), externalRef empty.
+//  2. DeployAction("CREATE") resumes polling — POST must NOT re-fire (the anchor is the duplicate
+//     guard), the poll completes, externalRef is populated, the anchor is cleared.
+//
+// After this, the next reconcile's Observe sees externalRef set → Delete() fires REMOVE properly.
+func TestDeployAction_DeleteDuringCreatePoll_ResumesCreatePoll(t *testing.T) {
+	postCalled := false
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			if method == "POST" {
+				postCalled = true
+				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+					StatusCode: 202, Body: `{"name": "operations/123"}`,
+				}}, nil
+			}
+			// Poll GET — done immediately.
+			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
+				StatusCode: 200, Body: `{"done": true, "id": "model-789"}`,
+			}}, nil
+		},
+	}
+
+	// In-flight anchor set, externalRef NOT yet populated — the delete-during-create-poll shape.
+	cr := crWithPolling(`"http://api/" + .response.body.name`, map[string]interface{}{
+		"body": map[string]interface{}{"name": "operations/123"},
+	})
+	// externalRef is intentionally empty: the CREATE LRO has not completed.
+	cr.Spec.ForProvider.ExternalRef = ".poll.response.body.id"
+
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	crCtx := service.NewRequestCRContext(cr)
+
+	if err := DeployAction(svcCtx, crCtx, "CREATE"); err != nil {
+		t.Fatalf("unexpected error resuming CREATE poll during deletion: %v", err)
+	}
+	if postCalled {
+		t.Error("POST (mutate) must NOT re-fire when a polling.response anchor is set (delete-during-create-poll resumes the existing operation, no duplicate)")
+	}
+	if cr.Status.ExternalRef != "model-789" {
+		t.Errorf("expected externalRef=model-789 after poll completion, got %q", cr.Status.ExternalRef)
+	}
+	if cr.Status.Polling.Response != nil {
+		t.Error("expected anchor cleared after poll completion so the next reconcile OBSERVEs and fires REMOVE")
+	}
+}
+
+// TestDeployAction_DeleteDuringCreatePoll_PollStillRunning verifies that when the CREATE poll is
+// resumed during deletion and the operation is not yet done, DeployAction returns nil (budget
+// exhausted) so the reconciler requeues with the finalizer retained — it does NOT fire REMOVE and
+// does NOT drop the anchor prematurely. The next reconcile's Delete() resumes the poll again.
+//
+// A mock Poller returning Done:false (and no TerminalErr) pins the genuine budget-exhaustion path
+// rather than the timeout-terminal path: without it the real poller would race polling.timeout
+// (tiny here) and exit via TerminalErr -> SetTerminalFailure(clearAnchor=false), which also returns
+// nil and retains the anchor — indistinguishable by err/anchor alone but a different contract. The
+// TerminalError == "" assertion fails on the timeout-terminal path, pinning the path the test
+// documents.
+func TestDeployAction_DeleteDuringCreatePoll_PollStillRunning(t *testing.T) {
+	postCalled := false
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			if method == "POST" {
+				postCalled = true
+			}
+			t.Errorf("no HTTP call expected; the mock Poller drives the loop, got %s %s", method, url)
+			return httpClient.HttpDetails{}, nil
+		},
+	}
+
+	cr := crWithPolling(`"http://api/" + .response.body.name`, map[string]interface{}{
+		"body": map[string]interface{}{"name": "operations/123"},
+	})
+	cr.Spec.ForProvider.ExternalRef = ".poll.response.body.id"
+
+	// Inject a Poller that never completes: Done:false, no terminal. DeployAction's budget loop
+	// returns nil with the anchor retained and no terminal recorded — the requeue contract.
+	notDonePoller := &captureStartedAtPoller{}
+	notDonePoller.onPoll = func(_ *v1.Time) {} // keep StartedAt capture wiring intact
+	notDonePoller.result = polling.Result{Done: false, OperationURL: "http://api/operations/123"}
+
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	crCtx := service.NewRequestCRContext(cr)
+
+	err := DeployAction(svcCtx, crCtx, "CREATE", notDonePoller)
+	if err != nil {
+		t.Fatalf("expected nil (budget requeue, finalizer retained), got error: %v", err)
+	}
+	if postCalled {
+		t.Error("POST must not re-fire during poll resume")
+	}
+	if cr.Status.Polling.Response == nil {
+		t.Error("expected anchor retained while the CREATE poll is still running (finalizer must stay)")
+	}
+	if cr.Status.ExternalRef != "" {
+		t.Errorf("expected externalRef to remain empty while the poll is still running, got %q", cr.Status.ExternalRef)
+	}
+	if te := cr.GetTerminalError(); te != "" {
+		t.Errorf("expected no terminal error on the budget-exhaustion path, got %q (timeout-terminal path fired instead)", te)
+	}
+}
+
+// TestDeployAction_DeleteDuringCreatePoll_TimeoutIgnored pins the timeout gate: during deletion the
+// overall polling.timeout is suppressed so the LRO keeps being polled across requeues until it
+// confirms success or failure — it does NOT record a terminal (which would stall the finalizer
+// forever via IsUpToDate's terminal short-circuit). The real poller is used (not a mock): StartedAt
+// is set well in the past so the deadline has already elapsed, and the poll GET returns done:false.
+// Assertions: (1) the poll GET was actually issued (the gate must not short-circuit before issuing a
+// GET — otherwise it would requeue forever without ever polling), (2) no terminal error recorded,
+// (3) anchor retained, (4) externalRef still empty, (5) nil error (requeue, finalizer retained).
+// TestDeployAction_DeleteDuringCreatePoll_TimeoutIgnored pins the delete-during-create-poll timeout
+// gate at the DeployAction level: with DeletionTimestamp set and an already-elapsed polling.timeout
+// deadline, DeployAction("CREATE") must NOT record a terminal (which would stall the finalizer
+// forever via IsUpToDate's terminal short-circuit) and must retain the anchor so the finalizer stays
+// pending the LRO's final success/failure. The poller-level gate is pinned directly in
+// TestPoll_TimeoutDuringDeletion_NoTerminal; this test asserts DeployAction's caller contract.
+// A mock Poller returning Done:false (no TerminalErr) drives the loop without the real poller's 2m
+// budget, keeping the test fast.
+func TestDeployAction_DeleteDuringCreatePoll_TimeoutIgnored(t *testing.T) {
+	postCalled := false
+	httpMock := &MockHttpClient{
+		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			if method == "POST" {
+				postCalled = true
+			}
+			t.Errorf("no HTTP call expected; the mock Poller drives the loop, got %s %s", method, url)
+			return httpClient.HttpDetails{}, nil
+		},
+	}
+
+	cr := crWithPolling(`"http://api/" + .response.body.name`, map[string]interface{}{
+		"body": map[string]interface{}{"name": "operations/123"},
+	})
+	cr.Spec.ForProvider.ExternalRef = ".poll.response.body.id"
+	// Mark the resource deleted: this is what activates the timeout-suppression gate.
+	now := v1.Now()
+	cr.DeletionTimestamp = &now
+
+	// Mock Poller returning not-done: simulates the loop running past the elapsed deadline under
+	// the per-reconcile budget without recording a terminal. (The real poller would run ~2m, so a
+	// mock keeps this fast while pinning DeployAction's no-terminal + retain-anchor contract.)
+	notDonePoller := &captureStartedAtPoller{}
+	notDonePoller.onPoll = func(_ *v1.Time) {}
+	notDonePoller.result = polling.Result{Done: false, OperationURL: "http://api/operations/123"}
+
+	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), httpMock, nil)
+	crCtx := service.NewRequestCRContext(cr)
+
+	err := DeployAction(svcCtx, crCtx, "CREATE", notDonePoller)
+	if err != nil {
+		t.Fatalf("expected nil (budget requeue past timeout, finalizer retained), got error: %v", err)
+	}
+	if postCalled {
+		t.Error("POST (mutate) must NOT re-fire when an anchor is set")
+	}
+	if te := cr.GetTerminalError(); te != "" {
+		t.Errorf("expected no terminal error during deletion (timeout must be ignored, not recorded), got %q", te)
+	}
+	if cr.Status.Polling.Response == nil {
+		t.Error("expected anchor retained during delete-during-create-poll past timeout (finalizer must stay)")
+	}
+	if cr.Status.ExternalRef != "" {
+		t.Errorf("expected externalRef to remain empty (poll not done), got %q", cr.Status.ExternalRef)
+	}
+}
+
 func TestDeployAction_BackwardCompat_NoPollingNoOIDC(t *testing.T) {
 	httpMock := &MockHttpClient{
 		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
@@ -1111,10 +1281,13 @@ func TestDeployAction_NormalResume_PreservesStartedAt(t *testing.T) {
 	}
 }
 
-// captureStartedAtPoller records the StartedAt the foreground path hands to Poll and
-// completes immediately. It reads it via the crCtx the real flow passes.
+// captureStartedAtPoller records the StartedAt the foreground path hands to Poll and returns a
+// caller-chosen result. It reads StartedAt via the crCtx the real flow passes. When result is the
+// zero polling.Result the poller returns Done:true (the legacy default); set result explicitly to
+// drive other outcomes (e.g. Done:false to exercise budget exhaustion).
 type captureStartedAtPoller struct {
 	onPoll func(startedAt *v1.Time)
+	result polling.Result
 }
 
 func (m *captureStartedAtPoller) Poll(
@@ -1123,7 +1296,16 @@ func (m *captureStartedAtPoller) Poll(
 	_ interfaces.HTTPMapping,
 	_ map[string]interface{},
 ) (polling.Result, error) {
-	m.onPoll(crCtx.Status().GetOperationStartedAt())
+	if m.onPoll != nil {
+		m.onPoll(crCtx.Status().GetOperationStartedAt())
+	}
+	// Default to the legacy "done immediately" result when the caller left result unset.
+	if m.result.Done || m.result.TerminalErr != "" || m.result.FailingPollResponse != nil {
+		return m.result, nil
+	}
+	if m.result.OperationURL != "" {
+		return m.result, nil
+	}
 	return polling.Result{Done: true, PollResponse: map[string]interface{}{"body": map[string]interface{}{"id": "model-789"}}}, nil
 }
 

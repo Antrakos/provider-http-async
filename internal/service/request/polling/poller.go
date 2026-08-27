@@ -29,6 +29,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -173,12 +174,26 @@ func (fp *foregroundPoller) Poll(
 	deadline := startedAt.Add(timeout)
 	budgetEnd := time.Now().Add(defaultReconcileBudget)
 
+	// Deletion committed: a polling.timeout terminal would stall the finalizer forever.
+	// IsUpToDate's terminal short-circuit returns the terminal as a Go error, which makes the
+	// managed reconciler bail (reconciler.go:1179) before its WasDeleted delete branch
+	// (reconciler.go:1225) — so Delete() is never called again and the finalizer is retained
+	// indefinitely. Per the delete-during-create-poll contract, deletion keeps polling the LRO
+	// across requeues until it confirms success (done) or failure (polling.error), ignoring the
+	// overall timeout. The per-reconcile budget below still bounds each reconcile so a single
+	// reconcile can't run forever; it returns Done:false and Crossplane requeues. (The bad/empty
+	// polling.url config terminals below are NOT suppressed — they cannot issue a valid GET, so
+	// they retain the anchor and stall visibly rather than hot-looping against an unpollable URL.)
+	deleted := meta.WasDeleted(crCtx.GetCR())
+
 	for {
 		// Overall timeout: a terminal failure (not a requeuing error) so a
 		// never-completing operation becomes visible and stalled rather than hot-looping
 		// requeues. The anchor is retained, so raising polling.timeout (a spec change)
 		// clears the terminal state, resets the deadline, and resumes.
-		if time.Now().After(deadline) {
+		// Suppressed during deletion (see the `deleted` note above): the timeout would stall the
+		// finalizer forever instead of awaiting the LRO's final confirmation.
+		if !deleted && time.Now().After(deadline) {
 			return Result{OperationURL: operationURL, TerminalErr: fmt.Sprintf(
 				"polling timeout after %s for operation %s", timeout, operationURL,
 			)}, nil

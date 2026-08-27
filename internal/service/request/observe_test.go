@@ -1260,6 +1260,115 @@ func TestIsUpToDate_InFlightAnchor_Routing(t *testing.T) {
 			t.Error("expected Synced=false (not up to date) so the controller re-enters DeployAction")
 		}
 	})
+
+	// Delete-during-create-poll: deletion requested while a CREATE+poll LRO is still in flight
+	// (anchor set, externalRef not yet written). The non-deleted path returns ErrObjectNotFound to
+	// route through Create(); on a deletion reconcile that would make the managed reconciler drop
+	// the finalizer immediately and orphan the in-flight cloud operation. Instead IsUpToDate must
+	// report the resource as existing (InFlight, no error) so the reconciler enters its delete
+	// branch and calls Delete(), which detects this shape and resumes the CREATE poll.
+	t.Run("NoExternalRef_Deleted_ReturnsInFlight_RoutesToDelete", func(t *testing.T) {
+		cr := buildCR(false)
+		now := v1.Now()
+		cr.DeletionTimestamp = &now
+		svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
+			MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				t.Errorf("OBSERVE must not fire while the anchor is in flight; got %s %s", method, url)
+				return httpClient.HttpDetails{}, nil
+			},
+		}, nil)
+		got, err := IsUpToDate(svcCtx, service.NewRequestCRContext(cr))
+		if err != nil {
+			t.Fatalf("expected no error (routes to Delete, not orphan-on-ErrObjectNotFound), got %v", err)
+		}
+		if !got.InFlight {
+			t.Error("expected InFlight=true so the controller reports ResourceExists:true and calls Delete() to resume the CREATE poll")
+		}
+		if got.Synced {
+			t.Error("expected Synced=false (not up to date)")
+		}
+	})
+
+	// Delete-during-terminal: a CREATE+poll resumed during deletion failed terminally. The terminal
+	// short-circuit runs before the in-flight branch, so without a WasDeleted guard the terminal
+	// observation would be returned as a Go error and the managed reconciler would bail before its
+	// delete branch — stalling Terminating forever. The guard discriminates by anchor + externalRef:
+	//
+	//   - anchor nil + externalRef empty: the terminal confirmed nothing was created (operation-failure
+	//     terminal cleared the anchor) → abandon (ErrObjectNotFound) so the finalizer is dropped.
+	//   - anchor retained: server-side LRO state is UNKNOWN (timeout / bad polling.url) → stall visibly
+	//     (terminal observation, finalizer held) for operator intervention.
+	//   - anchor nil + externalRef set: the terminal occurred on an EXISTING resource (UPDATE/REMOVE LRO,
+	//     non-polling mutate, missing-UPDATE-mapping) → must NOT abandon (would orphan) → stall.
+	deletedTerminalCR := func(setExternalRef, retainAnchor bool) *v1alpha2.AsyncRequest {
+		cr := httpRequest()
+		cr.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+			{Method: "POST", Action: "CREATE", URL: ".payload.baseUrl", Polling: &common.Polling{URL: ".response.body.name", Done: ".poll.response.body.done == true"}},
+			{Method: "GET", Action: "OBSERVE", URL: ".payload.baseUrl + \"/\" + .status.externalRef"},
+		}
+		now := v1.Now()
+		cr.DeletionTimestamp = &now
+		cr.Status.TerminalError = "terminal: operation failed"
+		cr.SetObservedGeneration(0) // generation(0) == observedGeneration(0) → terminal short-circuit active
+		if retainAnchor {
+			cr.SetPollingResponse(map[string]interface{}{"body": map[string]interface{}{"name": "op-1"}})
+		}
+		if setExternalRef {
+			cr.Status.ExternalRef = "model-789"
+		}
+		return cr
+	}
+
+	t.Run("DeletedTerminal_AnchorNil_ExternalRefEmpty_Abandons", func(t *testing.T) {
+		cr := deletedTerminalCR(false, false)
+		svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
+			MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				t.Errorf("OBSERVE must not fire; got %s %s", method, url)
+				return httpClient.HttpDetails{}, nil
+			},
+		}, nil)
+		_, err := IsUpToDate(svcCtx, service.NewRequestCRContext(cr))
+		if err == nil || err.Error() != observe.ErrObjectNotFound {
+			t.Fatalf("expected ErrObjectNotFound (abandon nothing-created terminal during deletion), got %v", err)
+		}
+	})
+
+	t.Run("DeletedTerminal_AnchorRetained_Stalls", func(t *testing.T) {
+		cr := deletedTerminalCR(false, true)
+		svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
+			MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				t.Errorf("OBSERVE must not fire; got %s %s", method, url)
+				return httpClient.HttpDetails{}, nil
+			},
+		}, nil)
+		got, err := IsUpToDate(svcCtx, service.NewRequestCRContext(cr))
+		if err != nil {
+			t.Fatalf("expected no error (stall visibly, not abandon), got %v", err)
+		}
+		if got.TerminalError == "" {
+			t.Error("expected TerminalError set (visible stall) for unknown-state terminal with anchor retained during deletion")
+		}
+	})
+
+	t.Run("DeletedTerminal_AnchorNil_ExternalRefSet_DoesNotAbandon", func(t *testing.T) {
+		// A terminal on an EXISTING resource (externalRef set) must NOT be abandoned — that would
+		// orphan the real cloud resource. It must stall so the operator can intervene or the spec
+		// can be fixed. This guards the externalRef=="" condition on the abandon branch.
+		cr := deletedTerminalCR(true, false)
+		svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
+			MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				t.Errorf("OBSERVE must not fire; got %s %s", method, url)
+				return httpClient.HttpDetails{}, nil
+			},
+		}, nil)
+		got, err := IsUpToDate(svcCtx, service.NewRequestCRContext(cr))
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if got.TerminalError == "" {
+			t.Error("expected TerminalError set (stall) for a terminal on an existing resource during deletion — must NOT abandon and orphan")
+		}
+	})
 }
 
 // TestIsUpToDate_TerminalClear_ResetsStartedAt covers Gap 2 and Gap 5: a spec change
