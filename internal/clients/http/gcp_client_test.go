@@ -38,7 +38,7 @@ func TestGCPClient_HeaderInjection(t *testing.T) {
 	}}
 
 	c := newGCPClientWithSource(inner, src)
-	_, err := c.SendRequest(context.Background(), "GET", "http://example.com",
+	_, err := c.SendRequest(context.Background(), "GET", Data{Encrypted: "http://example.com", Decrypted: "http://example.com"},
 		Data{Encrypted: "", Decrypted: ""},
 		Data{Encrypted: map[string][]string{}, Decrypted: map[string][]string{}},
 		nil)
@@ -61,7 +61,7 @@ func TestGCPClient_MasksTokenInEncryptedCopy(t *testing.T) {
 	}}
 
 	c := newGCPClientWithSource(inner, src)
-	_, _ = c.SendRequest(context.Background(), "GET", "http://example.com",
+	_, _ = c.SendRequest(context.Background(), "GET", Data{Encrypted: "http://example.com", Decrypted: "http://example.com"},
 		Data{Encrypted: "", Decrypted: ""},
 		Data{Encrypted: map[string][]string{}, Decrypted: map[string][]string{}},
 		nil)
@@ -79,7 +79,7 @@ func TestGCPClient_DoesNotOverwriteExistingHeader(t *testing.T) {
 
 	c := newGCPClientWithSource(inner, src)
 	preSet := map[string][]string{"Authorization": {"pre-set"}}
-	_, err := c.SendRequest(context.Background(), "GET", "http://example.com",
+	_, err := c.SendRequest(context.Background(), "GET", Data{Encrypted: "http://example.com", Decrypted: "http://example.com"},
 		Data{Encrypted: "", Decrypted: ""},
 		Data{Encrypted: preSet, Decrypted: preSet},
 		nil)

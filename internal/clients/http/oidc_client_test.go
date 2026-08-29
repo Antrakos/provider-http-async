@@ -40,7 +40,7 @@ type captureClient struct {
 	lastHeaders Data
 }
 
-func (c *captureClient) SendRequest(_ context.Context, _ string, _ string, _ Data, headers Data, _ *TLSConfigData) (HttpDetails, error) {
+func (c *captureClient) SendRequest(_ context.Context, _ string, _ Data, _ Data, headers Data, _ *TLSConfigData) (HttpDetails, error) {
 	c.lastHeaders = headers
 	return HttpDetails{}, nil
 }
@@ -62,7 +62,7 @@ func TestOIDCClient_HeaderInjection(t *testing.T) {
 		Prefix: "Bearer ",
 	})
 
-	_, err := c.SendRequest(context.Background(), "GET", "http://example.com",
+	_, err := c.SendRequest(context.Background(), "GET", Data{Encrypted: "http://example.com", Decrypted: "http://example.com"},
 		Data{Encrypted: "", Decrypted: ""},
 		Data{Encrypted: map[string][]string{}, Decrypted: map[string][]string{}},
 		nil)
@@ -90,7 +90,7 @@ func TestOIDCClient_DoesNotOverwriteExistingHeader(t *testing.T) {
 	c := newOIDCClientWithSource(inner, src, nil)
 
 	preSet := map[string][]string{"Authorization": {"pre-set"}}
-	_, err := c.SendRequest(context.Background(), "GET", "http://example.com",
+	_, err := c.SendRequest(context.Background(), "GET", Data{Encrypted: "http://example.com", Decrypted: "http://example.com"},
 		Data{Encrypted: "", Decrypted: ""},
 		Data{Encrypted: preSet, Decrypted: preSet},
 		nil)
@@ -113,7 +113,7 @@ func TestOIDCClient_CustomHeaderName(t *testing.T) {
 		Prefix: "",
 	})
 
-	_, _ = c.SendRequest(context.Background(), "GET", "http://example.com",
+	_, _ = c.SendRequest(context.Background(), "GET", Data{Encrypted: "http://example.com", Decrypted: "http://example.com"},
 		Data{Encrypted: "", Decrypted: ""},
 		Data{Encrypted: map[string][]string{}, Decrypted: map[string][]string{}},
 		nil)

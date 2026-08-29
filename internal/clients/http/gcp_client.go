@@ -54,7 +54,7 @@ func NewGCPClient(ctx context.Context, inner Client, cfg *common.GCPAuth) (Clien
 	return &gcpClient{inner: inner, source: source}, nil
 }
 
-func (c *gcpClient) SendRequest(ctx context.Context, method string, url string, body Data, headers Data, tlsConfig *TLSConfigData) (HttpDetails, error) {
+func (c *gcpClient) SendRequest(ctx context.Context, method string, url Data, body Data, headers Data, tlsConfig *TLSConfigData) (HttpDetails, error) {
 	tok, err := c.source.Token()
 	if err != nil {
 		return HttpDetails{}, errors.Wrap(err, "failed to obtain GCP token")

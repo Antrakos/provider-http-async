@@ -120,7 +120,7 @@ func drivePolling(svcCtx *service.ServiceContext, crCtx *service.DisposableReque
 		}
 
 		pollResp, err := svcCtx.HTTP.SendRequest(
-			svcCtx.Ctx, "GET", operationURL,
+			svcCtx.Ctx, "GET", httpClient.Data{Encrypted: operationURL, Decrypted: operationURL},
 			httpClient.Data{Encrypted: "", Decrypted: ""},
 			httpClient.Data{Encrypted: map[string][]string{}, Decrypted: map[string][]string{}},
 			svcCtx.TLSConfigData,

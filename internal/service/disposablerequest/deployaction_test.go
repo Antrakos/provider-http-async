@@ -5,7 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	"github.com/pkg/errors"
+	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -24,14 +26,14 @@ type countingHTTPClient struct {
 	calls int
 }
 
-func (c *countingHTTPClient) SendRequest(_ context.Context, method, url string, _, _ httpClient.Data, _ *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+func (c *countingHTTPClient) SendRequest(_ context.Context, method string, url httpClient.Data, _, _ httpClient.Data, _ *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 	c.calls++
 	if c.err != nil {
 		return httpClient.HttpDetails{}, c.err
 	}
 	return httpClient.HttpDetails{
 		HttpResponse: c.resp,
-		HttpRequest:  httpClient.HttpRequest{Method: method, URL: url},
+		HttpRequest:  httpClient.HttpRequest{Method: method, URL: url.Decrypted.(string)},
 	}, nil
 }
 
@@ -186,4 +188,57 @@ func TestDeployAction_OneOffTerminalOnFailure(t *testing.T) {
 	if http.calls != 1 {
 		t.Errorf("expected the trigger to fire only once with rollbackRetriesLimit=1, got %d calls", http.calls)
 	}
+}
+
+// TestSendHttpRequest_ResolvesSecretsInURL is a regression test: sendHttpRequest
+// must resolve {{ name:namespace:key }} placeholders in the URL, the same way it
+// already does for Body and Headers, and must never pass the resolved secret
+// value as the Encrypted (status/logged) form.
+func TestSendHttpRequest_ResolvesSecretsInURL(t *testing.T) {
+	var gotURL httpClient.Data
+
+	spec := &v1alpha2.AsyncDisposableRequestParameters{
+		URL:    "https://api.example.com/users?token={{ my-secret:my-namespace:token }}",
+		Method: "GET",
+	}
+
+	localKube := &test.MockClient{
+		MockGet: func(_ context.Context, _ client.ObjectKey, obj client.Object) error {
+			secret, ok := obj.(*corev1.Secret)
+			if !ok {
+				return errors.New("object is not a Secret")
+			}
+			secret.Data = map[string][]byte{"token": []byte("real-token-value")}
+			return nil
+		},
+	}
+
+	mockHTTP := &countingHTTPClient{}
+
+	svcCtx := service.NewServiceContext(context.Background(), localKube, logging.NewNopLogger(), &urlCapturingClient{inner: mockHTTP, got: &gotURL}, nil)
+	if _, err := sendHttpRequest(svcCtx, spec); err != nil {
+		t.Fatalf("sendHttpRequest(...): unexpected error: %v", err)
+	}
+
+	wantEncrypted := "https://api.example.com/users?token={{ my-secret:my-namespace:token }}"
+	wantDecrypted := "https://api.example.com/users?token=real-token-value"
+
+	if gotURL.Encrypted != wantEncrypted {
+		t.Errorf("sendHttpRequest(...): url.Encrypted = %q, want %q", gotURL.Encrypted, wantEncrypted)
+	}
+	if gotURL.Decrypted != wantDecrypted {
+		t.Errorf("sendHttpRequest(...): url.Decrypted = %q, want %q", gotURL.Decrypted, wantDecrypted)
+	}
+}
+
+// urlCapturingClient wraps a httpClient.Client and records the URL Data passed
+// to SendRequest, so a test can assert Encrypted/Decrypted splitting.
+type urlCapturingClient struct {
+	inner httpClient.Client
+	got   *httpClient.Data
+}
+
+func (c *urlCapturingClient) SendRequest(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+	*c.got = url
+	return c.inner.SendRequest(ctx, method, url, body, headers, tlsConfig)
 }

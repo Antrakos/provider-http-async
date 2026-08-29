@@ -24,7 +24,7 @@ type mockHTTPClient struct {
 	err     error
 }
 
-func (m *mockHTTPClient) SendRequest(_ context.Context, method, url string, body, headers httpClient.Data, _ *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+func (m *mockHTTPClient) SendRequest(_ context.Context, method string, url httpClient.Data, body, headers httpClient.Data, _ *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 	if m.err != nil {
 		return httpClient.HttpDetails{}, m.err
 	}
@@ -34,7 +34,7 @@ func (m *mockHTTPClient) SendRequest(_ context.Context, method, url string, body
 	}
 	return httpClient.HttpDetails{
 		HttpResponse: resp,
-		HttpRequest:  httpClient.HttpRequest{Method: method, URL: url},
+		HttpRequest:  httpClient.HttpRequest{Method: method, URL: url.Decrypted.(string)},
 	}, nil
 }
 

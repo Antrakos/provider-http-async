@@ -17,7 +17,7 @@ import (
 )
 
 type RequestDetails struct {
-	Url     string
+	Url     httpClient.Data
 	Body    httpClient.Data
 	Headers httpClient.Data
 }
@@ -32,13 +32,13 @@ func GenerateRequestDetails(svcCtx *service.ServiceContext, methodMapping interf
 	}
 
 	jqObject := GenerateRequestContext(forProvider, status, patchedResponse)
-	url, err := generateURL(methodMapping.GetURL(), jqObject)
+	url, err := generateURL(svcCtx, methodMapping.GetURL(), jqObject)
 	if err != nil {
 		return RequestDetails{}, err, false
 	}
 
-	if !utils.IsUrlValid(url) {
-		return RequestDetails{}, errors.Errorf(utils.ErrInvalidURL, url), false
+	if !utils.IsUrlValid(url.Decrypted.(string)) {
+		return RequestDetails{}, errors.Errorf(utils.ErrInvalidURL, url.Decrypted.(string)), false
 	}
 
 	body, err := generateBody(svcCtx, methodMapping.GetBody(), jqObject)
@@ -170,7 +170,8 @@ func GenerateValidRequestDetails(svcCtx *service.ServiceContext, crCtx *service.
 
 // IsRequestValid checks if the request details are valid.
 func IsRequestValid(requestDetails RequestDetails) bool {
-	return (!strings.Contains(fmt.Sprint(requestDetails), "null")) && (requestDetails.Url != "")
+	url, ok := requestDetails.Url.Decrypted.(string)
+	return (!strings.Contains(fmt.Sprint(requestDetails), "null")) && ok && (url != "")
 }
 
 // coalesceHeaders returns the non-nil headers, or the default headers if both are nil.
@@ -181,14 +182,23 @@ func coalesceHeaders(mapping interfaces.HTTPMapping, spec interfaces.HTTPRequest
 	return spec.GetHeaders()
 }
 
-// generateURL applies a JQ filter to generate a URL.
-func generateURL(urlJQFilter string, jqObject map[string]interface{}) (string, error) {
+// generateURL applies a JQ filter to generate a URL, then resolves any
+// secret placeholders in it the same way generateBody/generateHeaders do.
+func generateURL(svcCtx *service.ServiceContext, urlJQFilter string, jqObject map[string]interface{}) (httpClient.Data, error) {
 	getURL, err := requestprocessing.ApplyJQOnStr(urlJQFilter, jqObject)
 	if err != nil {
-		return "", err
+		return httpClient.Data{}, err
 	}
 
-	return getURL, nil
+	sensitiveURL, err := datapatcher.PatchSecretsIntoString(svcCtx.Ctx, svcCtx.LocalKube, getURL, svcCtx.Logger)
+	if err != nil {
+		return httpClient.Data{}, err
+	}
+
+	return httpClient.Data{
+		Encrypted: getURL,
+		Decrypted: sensitiveURL,
+	}, nil
 }
 
 // generateBody applies a mapping body to generate the request body.

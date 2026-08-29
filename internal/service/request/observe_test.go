@@ -98,13 +98,13 @@ func httpRequest(rm ...httpRequestModifier) *v1alpha2.AsyncRequest {
 	return r
 }
 
-type MockSendRequestFn func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error)
+type MockSendRequestFn func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error)
 
 type MockHttpClient struct {
 	MockSendRequest MockSendRequestFn
 }
 
-func (c *MockHttpClient) SendRequest(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+func (c *MockHttpClient) SendRequest(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 	return c.MockSendRequest(ctx, method, url, body, headers, tlsConfigData)
 }
 
@@ -126,7 +126,7 @@ func Test_isUpToDate(t *testing.T) {
 		"ObjectIdKnownBeforeCreate": {
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{
 							HttpResponse: httpClient.HttpResponse{
 								Body:       `{"username":"john_doe_new_username"}`,
@@ -163,7 +163,7 @@ func Test_isUpToDate(t *testing.T) {
 		"ObjectNotFoundEmptyStatus": {
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{}, nil
 					},
 				},
@@ -182,7 +182,7 @@ func Test_isUpToDate(t *testing.T) {
 		"ObjectNotFoundPostFailed": {
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{}, nil
 					},
 				},
@@ -201,7 +201,7 @@ func Test_isUpToDate(t *testing.T) {
 		"ObjectNotFound404StatusCode": {
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{
 							HttpResponse: httpClient.HttpResponse{
 								Body:       "",
@@ -224,7 +224,7 @@ func Test_isUpToDate(t *testing.T) {
 		"FailBodyNotJSON": {
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{
 							HttpResponse: httpClient.HttpResponse{
 								Body: "not a JSON",
@@ -247,7 +247,7 @@ func Test_isUpToDate(t *testing.T) {
 		"SuccessNotSynced": {
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{
 							HttpResponse: httpClient.HttpResponse{
 								Body:       `{"username":"old_name"}`,
@@ -282,7 +282,7 @@ func Test_isUpToDate(t *testing.T) {
 		"SuccessNoPUTMapping": {
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{
 							HttpResponse: httpClient.HttpResponse{
 								Body:       `{"username":"old_name"}`,
@@ -322,7 +322,7 @@ func Test_isUpToDate(t *testing.T) {
 		"SuccessJSONBody": {
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{
 							HttpResponse: httpClient.HttpResponse{
 								Body:       `{"username":"john_doe_new_username"}`,
@@ -357,7 +357,7 @@ func Test_isUpToDate(t *testing.T) {
 		"MissingMappingObjectNotCreated": {
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{}, nil
 					},
 				},
@@ -382,7 +382,7 @@ func Test_isUpToDate(t *testing.T) {
 		"MissingMappingObjectCreated": {
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{}, nil
 					},
 				},
@@ -415,8 +415,8 @@ func Test_isUpToDate(t *testing.T) {
 		"EmptyExternalRef_ObserveURLReferencesIt_RoutesToCreate_NoHTTPCall": {
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
-						t.Errorf("OBSERVE must not fire when externalRef is empty and the URL references it; got %s %s", method, url)
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+						t.Errorf("OBSERVE must not fire when externalRef is empty and the URL references it; got %s %s", method, url.Decrypted)
 						return httpClient.HttpDetails{}, nil
 					},
 				},
@@ -456,8 +456,8 @@ func Test_isUpToDate(t *testing.T) {
 		"PollFailureRealResponse_EmptyExternalRef_RoutesToCreate_NoHTTPCall": {
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
-						t.Errorf("OBSERVE must not fire after a poll-failure write with empty externalRef; got %s %s", method, url)
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+						t.Errorf("OBSERVE must not fire after a poll-failure write with empty externalRef; got %s %s", method, url.Decrypted)
 						return httpClient.HttpDetails{}, nil
 					},
 				},
@@ -491,9 +491,9 @@ func Test_isUpToDate(t *testing.T) {
 		"EmptyExternalRef_ConstantObserveURL_ObserveRunsNormally": {
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
-						if !strings.HasPrefix(url, "http://some.org/") {
-							t.Errorf("expected OBSERVE against the constant URL, got %s", url)
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+						if !strings.HasPrefix(url.Decrypted.(string), "http://some.org/") {
+							t.Errorf("expected OBSERVE against the constant URL, got %s", url.Decrypted)
 						}
 						return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
 							StatusCode: 200,
@@ -532,7 +532,7 @@ func Test_isUpToDate(t *testing.T) {
 		"ExternalRefSet_ObserveURLReferencesIt_ObserveRuns_404RoutesToCreate": {
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 						return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: http.StatusNotFound}}, nil
 					},
 				},
@@ -559,7 +559,7 @@ func Test_isUpToDate(t *testing.T) {
 		"ResourceExistsCheckFalse_RoutesToCreate": {
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 						// Parent endpoint always returns 200; no deployedModel with our externalRef.
 						return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
 							StatusCode: 200,
@@ -598,7 +598,7 @@ func Test_isUpToDate(t *testing.T) {
 		"ResourceExistsCheckTrue_ThenDrift_WithUpdateMapping": {
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 						return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
 							StatusCode: 200,
 							Body:       `{"deployedModels": [{"id": "model-789"}]}`,
@@ -1116,7 +1116,7 @@ func Test_requestDetails(t *testing.T) {
 			},
 			want: want{
 				result: requestgen.RequestDetails{
-					Url: "https://api.example.com/users/",
+					Url: httpClient.Data{Encrypted: "https://api.example.com/users/", Decrypted: "https://api.example.com/users/"},
 					Body: httpClient.Data{
 						Encrypted: "",
 						Decrypted: "",
@@ -1148,7 +1148,7 @@ func Test_requestDetails(t *testing.T) {
 			},
 			want: want{
 				result: requestgen.RequestDetails{
-					Url: "https://api.example.com/users",
+					Url: httpClient.Data{Encrypted: "https://api.example.com/users", Decrypted: "https://api.example.com/users"},
 					Body: httpClient.Data{
 						Encrypted: `{"email":"john.doe@example.com","username":"john_doe"}`,
 						Decrypted: `{"email":"john.doe@example.com","username":"john_doe"}`,
@@ -1230,8 +1230,8 @@ func TestIsUpToDate_InFlightAnchor_Routing(t *testing.T) {
 		// breaks for no-UPDATE-mapping resources if routed through Update().
 		cr := buildCR(false)
 		svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
-			MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
-				t.Errorf("OBSERVE must not fire while the anchor is in flight; got %s %s", method, url)
+			MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				t.Errorf("OBSERVE must not fire while the anchor is in flight; got %s %s", method, url.Decrypted)
 				return httpClient.HttpDetails{}, nil
 			},
 		}, nil)
@@ -1247,8 +1247,8 @@ func TestIsUpToDate_InFlightAnchor_Routing(t *testing.T) {
 		// whose URLs resolve via .status.externalRef.
 		cr := buildCR(true)
 		svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
-			MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
-				t.Errorf("OBSERVE must not fire while the anchor is in flight; got %s %s", method, url)
+			MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				t.Errorf("OBSERVE must not fire while the anchor is in flight; got %s %s", method, url.Decrypted)
 				return httpClient.HttpDetails{}, nil
 			},
 		}, nil)
@@ -1272,8 +1272,8 @@ func TestIsUpToDate_InFlightAnchor_Routing(t *testing.T) {
 		now := v1.Now()
 		cr.DeletionTimestamp = &now
 		svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
-			MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
-				t.Errorf("OBSERVE must not fire while the anchor is in flight; got %s %s", method, url)
+			MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				t.Errorf("OBSERVE must not fire while the anchor is in flight; got %s %s", method, url.Decrypted)
 				return httpClient.HttpDetails{}, nil
 			},
 		}, nil)
@@ -1322,8 +1322,8 @@ func TestIsUpToDate_InFlightAnchor_Routing(t *testing.T) {
 	t.Run("DeletedTerminal_AnchorNil_ExternalRefEmpty_Abandons", func(t *testing.T) {
 		cr := deletedTerminalCR(false, false)
 		svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
-			MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
-				t.Errorf("OBSERVE must not fire; got %s %s", method, url)
+			MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				t.Errorf("OBSERVE must not fire; got %s %s", method, url.Decrypted)
 				return httpClient.HttpDetails{}, nil
 			},
 		}, nil)
@@ -1336,8 +1336,8 @@ func TestIsUpToDate_InFlightAnchor_Routing(t *testing.T) {
 	t.Run("DeletedTerminal_AnchorRetained_Stalls", func(t *testing.T) {
 		cr := deletedTerminalCR(false, true)
 		svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
-			MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
-				t.Errorf("OBSERVE must not fire; got %s %s", method, url)
+			MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				t.Errorf("OBSERVE must not fire; got %s %s", method, url.Decrypted)
 				return httpClient.HttpDetails{}, nil
 			},
 		}, nil)
@@ -1356,8 +1356,8 @@ func TestIsUpToDate_InFlightAnchor_Routing(t *testing.T) {
 		// can be fixed. This guards the externalRef=="" condition on the abandon branch.
 		cr := deletedTerminalCR(true, false)
 		svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
-			MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
-				t.Errorf("OBSERVE must not fire; got %s %s", method, url)
+			MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				t.Errorf("OBSERVE must not fire; got %s %s", method, url.Decrypted)
 				return httpClient.HttpDetails{}, nil
 			},
 		}, nil)
@@ -1391,7 +1391,7 @@ func TestIsUpToDate_TerminalClear_ResetsStartedAt(t *testing.T) {
 	cr.Status.Response = v1alpha2.Response{StatusCode: 0, Body: ""}
 
 	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			// OBSERVE GET for an uncreated resource: returns 404 → ErrObjectNotFound.
 			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: http.StatusNotFound}}, nil
 		},
@@ -1415,11 +1415,11 @@ func TestIsUpToDate_TerminalClear_ResetsStartedAt(t *testing.T) {
 func TestIsUpToDate_Import_SeededExternalRef_ObserveRuns_NoCreate(t *testing.T) {
 	observeCalled := false
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			observeCalled = true
 			// The imported resource exists at its real URL: baseUrl + "/models/" + externalRef.
-			if !strings.HasSuffix(url, "/models/789") {
-				t.Errorf("expected OBSERVE against the imported resource URL .../models/789, got %s", url)
+			if !strings.HasSuffix(url.Decrypted.(string), "/models/789") {
+				t.Errorf("expected OBSERVE against the imported resource URL .../models/789, got %s", url.Decrypted)
 			}
 			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
 				StatusCode: 200,
@@ -1490,7 +1490,7 @@ func TestIsUpToDate_ResponseDriven_BaseParity(t *testing.T) {
 		})
 		observeCalled := false
 		svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
-			MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 				observeCalled = true
 				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: http.StatusNotFound}}, nil
 			},
@@ -1514,10 +1514,10 @@ func TestIsUpToDate_ResponseDriven_BaseParity(t *testing.T) {
 		})
 		observeCalled := false
 		svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
-			MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 				observeCalled = true
-				if !strings.HasSuffix(url, "/users/123") {
-					t.Errorf("expected OBSERVE against .../users/123, got %s", url)
+				if !strings.HasSuffix(url.Decrypted.(string), "/users/123") {
+					t.Errorf("expected OBSERVE against .../users/123, got %s", url.Decrypted)
 				}
 				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
 					StatusCode: 200, Body: `{"id":"123","username":"john_doe"}`,
@@ -1556,7 +1556,7 @@ func TestIsUpToDate_ExternalRef_AllowedStatusCode_DoesNotRouteToCreate(t *testin
 		}
 	})
 	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			observeCalled = true
 			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: 418, Body: `{"ok": true}`}}, nil
 		},
@@ -1580,8 +1580,8 @@ func TestIsUpToDate_ExternalRef_AllowedStatusCode_DoesNotRouteToCreate(t *testin
 // rather than stall silently. CEL rejects this at admission; this covers the runtime guard.
 func TestIsUpToDate_PolledResponseIdentity_Rejected(t *testing.T) {
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
-			t.Errorf("no HTTP call must be made for a rejected polled-response-identity spec; got %s %s", method, url)
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			t.Errorf("no HTTP call must be made for a rejected polled-response-identity spec; got %s %s", method, url.Decrypted)
 			return httpClient.HttpDetails{}, nil
 		},
 	}
@@ -1620,8 +1620,8 @@ func TestIsUpToDate_PolledExternalRefIdentity_NotRejected(t *testing.T) {
 		}
 	})
 	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
-			t.Errorf("empty externalRef must route to Create via the identity gate, not fire OBSERVE; got %s %s", method, url)
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			t.Errorf("empty externalRef must route to Create via the identity gate, not fire OBSERVE; got %s %s", method, url.Decrypted)
 			return httpClient.HttpDetails{}, nil
 		},
 	}, nil)
@@ -1653,7 +1653,7 @@ func TestIsUpToDate_PolledConstantURL_NotRejected(t *testing.T) {
 		}
 	})
 	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			observeCalled = true
 			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: 200, Body: `{"ready": true}`}}, nil
 		},

@@ -88,7 +88,7 @@ func TestDeployAction(t *testing.T) {
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
 				httpClient: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{
 							HttpResponse: httpClient.HttpResponse{
 								StatusCode: 201,
@@ -139,7 +139,7 @@ func TestDeployAction(t *testing.T) {
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
 				httpClient: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{
 							HttpResponse: httpClient.HttpResponse{
 								StatusCode: 200,
@@ -191,7 +191,7 @@ func TestDeployAction(t *testing.T) {
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
 				httpClient: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{
 							HttpResponse: httpClient.HttpResponse{
 								StatusCode: 200,
@@ -242,7 +242,7 @@ func TestDeployAction(t *testing.T) {
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
 				httpClient: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{
 							HttpResponse: httpClient.HttpResponse{
 								StatusCode: 204,
@@ -293,7 +293,7 @@ func TestDeployAction(t *testing.T) {
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
 				httpClient: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{}, errBoom
 					},
 				},
@@ -329,7 +329,7 @@ func TestDeployAction(t *testing.T) {
 					MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
 				},
 				httpClient: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{}, nil
 					},
 				},
@@ -415,7 +415,7 @@ func mockKube() client.Client {
 func TestDeployAction_AsyncCreate_DoneAfterTwoPollIterations(t *testing.T) {
 	pollCalls := 0
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			if method == "POST" {
 				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
 					StatusCode: 202,
@@ -464,7 +464,7 @@ func TestDeployAction_AsyncCreate_DoneAfterTwoPollIterations(t *testing.T) {
 // controller requeues (the next OBSERVE overwrites status.response before the mutate re-fires).
 func TestDeployAction_AsyncCreate_OperationFailure_RetryByDefault(t *testing.T) {
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			if method == "POST" {
 				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
 					StatusCode: 202, Body: `{"name": "operations/456"}`,
@@ -543,7 +543,7 @@ func TestDeployAction_AsyncCreate_OperationFailure_RetryByDefault(t *testing.T) 
 // terminal (the provider's own lie, not the API's response). Now 200 >= 500 is false → retry.
 func TestDeployAction_AsyncCreate_PollFailure_RealStatusCode_NotPoisoningIsTerminalError(t *testing.T) {
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			if method == "POST" {
 				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
 					StatusCode: 202, Body: `{"name": "operations/456"}`,
@@ -601,7 +601,7 @@ func TestDeployAction_AsyncCreate_PollFailure_RealStatusCode_NotPoisoningIsTermi
 // and DeployAction returns nil (a terminal is written to status, not returned as a Go error).
 func TestDeployAction_AsyncCreate_OperationFailure_Terminal(t *testing.T) {
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			if method == "POST" {
 				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
 					StatusCode: 202, Body: `{"name": "operations/456"}`,
@@ -670,7 +670,7 @@ func TestDeployAction_AsyncCreate_OperationFailure_Terminal(t *testing.T) {
 // error), and the failing response stays in status.response.
 func TestDeployAction_NonPolling_IsTerminalError_Stalls(t *testing.T) {
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
 				StatusCode: 422, Body: `{"error": {"message": "invalid config"}}`,
 			}, HttpRequest: httpClient.HttpRequest{Method: "POST", URL: testURL}}, nil
@@ -724,7 +724,7 @@ func TestDeployAction_NonPolling_IsTerminalError_BoundedRetry(t *testing.T) {
 		return cr
 	}
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
 				StatusCode: 500, Body: `{}`,
 			}, HttpRequest: httpClient.HttpRequest{Method: "POST", URL: testURL}}, nil
@@ -756,7 +756,7 @@ func TestDeployAction_NonPolling_IsTerminalError_BoundedRetry(t *testing.T) {
 // the mutate on a config error the requeue cannot fix). The surfaced message names the jq failure.
 func TestDeployAction_IsTerminalError_BrokenExpression_Stalls(t *testing.T) {
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
 				StatusCode: 500, Body: `{}`,
 			}, HttpRequest: httpClient.HttpRequest{Method: "POST", URL: testURL}}, nil
@@ -790,7 +790,7 @@ func TestDeployAction_IsTerminalError_BrokenExpression_Stalls(t *testing.T) {
 // the controller requeues, and persists NO anchor (nothing was side-effected, so re-firing is safe).
 func TestDeployAction_PollingMutate_NonSuccess_RetryByDefault(t *testing.T) {
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
 				StatusCode: 400, Body: `{"error": "bad request"}`,
 			}, HttpRequest: httpClient.HttpRequest{Method: "POST", URL: testURL}}, nil
@@ -826,7 +826,7 @@ func TestDeployAction_PollingMutate_NonSuccess_RetryByDefault(t *testing.T) {
 // the resource. DeployAction returns nil, terminalError carries the message, and no anchor is set.
 func TestDeployAction_PollingMutate_NonSuccess_Terminal(t *testing.T) {
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
 				StatusCode: 403, Body: `{"error": {"message": "forbidden"}}`,
 			}, HttpRequest: httpClient.HttpRequest{Method: "POST", URL: testURL}}, nil
@@ -855,7 +855,7 @@ func TestDeployAction_PollingMutate_NonSuccess_Terminal(t *testing.T) {
 func TestDeployAction_CrashRecovery_SkipsMutate(t *testing.T) {
 	postCalled := false
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			if method == "POST" {
 				postCalled = true
 			}
@@ -896,7 +896,7 @@ func TestDeployAction_OrphanRecovery_NoDuplicate(t *testing.T) {
 	postCalls := 0
 	// The poll server reports done immediately once reached.
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			if method == "POST" {
 				postCalls++
 				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
@@ -978,7 +978,7 @@ func TestDeployAction_OrphanRecovery_NoDuplicate(t *testing.T) {
 func TestDeployAction_DeleteDuringCreatePoll_ResumesCreatePoll(t *testing.T) {
 	postCalled := false
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			if method == "POST" {
 				postCalled = true
 				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
@@ -1030,11 +1030,11 @@ func TestDeployAction_DeleteDuringCreatePoll_ResumesCreatePoll(t *testing.T) {
 func TestDeployAction_DeleteDuringCreatePoll_PollStillRunning(t *testing.T) {
 	postCalled := false
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			if method == "POST" {
 				postCalled = true
 			}
-			t.Errorf("no HTTP call expected; the mock Poller drives the loop, got %s %s", method, url)
+			t.Errorf("no HTTP call expected; the mock Poller drives the loop, got %s %s", method, url.Decrypted)
 			return httpClient.HttpDetails{}, nil
 		},
 	}
@@ -1090,11 +1090,11 @@ func TestDeployAction_DeleteDuringCreatePoll_PollStillRunning(t *testing.T) {
 func TestDeployAction_DeleteDuringCreatePoll_TimeoutIgnored(t *testing.T) {
 	postCalled := false
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			if method == "POST" {
 				postCalled = true
 			}
-			t.Errorf("no HTTP call expected; the mock Poller drives the loop, got %s %s", method, url)
+			t.Errorf("no HTTP call expected; the mock Poller drives the loop, got %s %s", method, url.Decrypted)
 			return httpClient.HttpDetails{}, nil
 		},
 	}
@@ -1137,7 +1137,7 @@ func TestDeployAction_DeleteDuringCreatePoll_TimeoutIgnored(t *testing.T) {
 
 func TestDeployAction_BackwardCompat_NoPollingNoOIDC(t *testing.T) {
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
 				StatusCode: 201, Body: `{"id": "42"}`,
 			}}, nil
@@ -1173,7 +1173,7 @@ func TestDeployAction_OIDCHeaderInjected(t *testing.T) {
 	// the wire by inspecting what SendRequest received.
 	var capturedAuthHeader string
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			if hdrs, ok := headers.Decrypted.(map[string][]string); ok {
 				if vals := hdrs["Authorization"]; len(vals) > 0 {
 					capturedAuthHeader = vals[0]
@@ -1233,7 +1233,7 @@ func TestDeployAction_ResumeAfterTerminalClear_PersistsStartedAt(t *testing.T) {
 	mockP := &captureStartedAtPoller{onPoll: func(s *v1.Time) { observedStartedAt = s }}
 
 	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			return httpClient.HttpDetails{}, nil // not called: anchor in flight skips the mutate
 		},
 	}, nil)
@@ -1265,7 +1265,7 @@ func TestDeployAction_NormalResume_PreservesStartedAt(t *testing.T) {
 	mockP := &captureStartedAtPoller{onPoll: func(s *v1.Time) { observed = s }}
 
 	svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			return httpClient.HttpDetails{}, nil
 		},
 	}, nil)
@@ -1331,7 +1331,7 @@ func TestDeployAction_NonPolling_NonSuccess_SurfacesError(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			httpMock := &MockHttpClient{
-				MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 					return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
 						StatusCode: tc.statusCode, Body: `{"error":"not found"}`,
 					}}, nil
@@ -1369,7 +1369,7 @@ func TestDeployAction_NonPolling_NonSuccess_SurfacesError(t *testing.T) {
 // explicitly allow-listed is not an error and must continue to reconcile successfully.
 func TestDeployAction_NonPolling_AllowedStatusCode_NotSurfaced(t *testing.T) {
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: 409, Body: `{}`}}, nil
 		},
 	}
@@ -1395,7 +1395,7 @@ func TestDeployAction_NonPolling_AllowedStatusCode_NotSurfaced(t *testing.T) {
 // fix only surfaces errors, it does not change the success path.
 func TestDeployAction_NonPolling_Success_NotSurfaced(t *testing.T) {
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: 200, Body: `{"id": "1"}`}}, nil
 		},
 	}

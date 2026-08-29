@@ -78,20 +78,20 @@ var (
 	}
 )
 
-type MockSendRequestFn func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error)
+type MockSendRequestFn func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error)
 
-type MockSendRequestWithTLSFn func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error)
+type MockSendRequestWithTLSFn func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error)
 
 type MockHttpClient struct {
 	MockSendRequest        MockSendRequestFn
 	MockSendRequestWithTLS MockSendRequestWithTLSFn
 }
 
-func (m *MockHttpClient) SendRequest(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+func (m *MockHttpClient) SendRequest(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 	return m.MockSendRequest(ctx, method, url, body, headers, tlsConfigData)
 }
 
-func (m *MockHttpClient) SendRequestWithTLS(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+func (m *MockHttpClient) SendRequestWithTLS(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 	if m.MockSendRequestWithTLS != nil {
 		return m.MockSendRequestWithTLS(ctx, method, url, body, headers, tlsConfig)
 	}
@@ -204,7 +204,7 @@ func TestObserve(t *testing.T) {
 			name: "ResourceBeingDeleted",
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{}, errors.New("resource not found")
 					},
 				},
@@ -224,7 +224,7 @@ func TestObserve(t *testing.T) {
 			name: "TerminalFailure_ReturnsErrorAndReadyFalse",
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 						t.Errorf("OBSERVE must not fire when a terminal error is recorded")
 						return httpClient.HttpDetails{}, nil
 					},
@@ -253,7 +253,7 @@ func TestObserve(t *testing.T) {
 			name: "InFlight_ReadyCreating",
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 						t.Errorf("OBSERVE must not fire while the anchor is in flight")
 						return httpClient.HttpDetails{}, nil
 					},
@@ -281,7 +281,7 @@ func TestObserve(t *testing.T) {
 			name: "MissingMappingTerminal_ReturnsErrorAndReadyFalse",
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 						return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: 200, Body: `{"deployedModels": []}`}}, nil
 					},
 				},
@@ -357,7 +357,7 @@ func TestObserve_ExternalRefSeeding(t *testing.T) {
 	// HTTP mock that always errors so Observe returns quickly after the seeding step.
 	// The seeding runs before IsUpToDate, so it mutates the CR regardless of this error.
 	http := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			return httpClient.HttpDetails{}, errBoom
 		},
 	}
@@ -437,7 +437,7 @@ func TestCreate(t *testing.T) {
 			name: "RequestFailed",
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{}, errBoom
 					},
 				},
@@ -455,7 +455,7 @@ func TestCreate(t *testing.T) {
 			name: "Success",
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{}, nil
 					},
 				},
@@ -516,7 +516,7 @@ func TestUpdate(t *testing.T) {
 			name: "RequestFailed",
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{}, errBoom
 					},
 				},
@@ -534,7 +534,7 @@ func TestUpdate(t *testing.T) {
 			name: "Success",
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{}, nil
 					},
 				},
@@ -595,7 +595,7 @@ func TestDelete(t *testing.T) {
 			name: "RequestFailed",
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{}, errBoom
 					},
 				},
@@ -613,7 +613,7 @@ func TestDelete(t *testing.T) {
 			name: "Success",
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body httpClient.Data, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{}, nil
 					},
 				},
@@ -1014,7 +1014,7 @@ func TestTLSConfiguration(t *testing.T) {
 			name: "TLSConfigAcceptedWithNilTLS",
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						// Accept any TLS config - the actual TLS config loading is handled by the service layer
 						return httpClient.HttpDetails{
 							HttpResponse: httpClient.HttpResponse{
@@ -1038,7 +1038,7 @@ func TestTLSConfiguration(t *testing.T) {
 			name: "InsecureSkipTLSVerifyAccepted",
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						// Accept any TLS config - the controller should handle insecure skip verify
 						return httpClient.HttpDetails{
 							HttpResponse: httpClient.HttpResponse{
@@ -1062,7 +1062,7 @@ func TestTLSConfiguration(t *testing.T) {
 			name: "TLSConfigWithClientCertsAccepted",
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						// Accept any TLS config - the service layer handles TLS config merging
 						return httpClient.HttpDetails{
 							HttpResponse: httpClient.HttpResponse{
@@ -1249,7 +1249,7 @@ func (m *mockPollerNotDone) Poll(
 func TestOrphanRecovery_RoutesResumeThroughCreate(t *testing.T) {
 	postCalls := 0
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			if method == "POST" {
 				postCalls++
 				return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{
@@ -1352,7 +1352,7 @@ func TestObserve_DeletionMonitoring(t *testing.T) {
 			name: "ResourceBeingDeleted",
 			args: args{
 				http: &MockHttpClient{
-					MockSendRequest: func(ctx context.Context, method string, url string, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
+					MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (resp httpClient.HttpDetails, err error) {
 						return httpClient.HttpDetails{
 							HttpResponse: httpClient.HttpResponse{
 								StatusCode: 200,
@@ -1405,8 +1405,8 @@ func TestObserve_DeletionMonitoring(t *testing.T) {
 // calls Create() and the resource is actually provisioned.
 func TestObserve_EmptyExternalRef_ObserveURLReferencesIt_RoutesToCreate(t *testing.T) {
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
-			t.Errorf("OBSERVE must not fire when externalRef is empty and the URL references it; got %s %s", method, url)
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+			t.Errorf("OBSERVE must not fire when externalRef is empty and the URL references it; got %s %s", method, url.Decrypted)
 			return httpClient.HttpDetails{}, nil
 		},
 	}
@@ -1449,7 +1449,7 @@ func TestObserve_EmptyExternalRef_ObserveURLReferencesIt_RoutesToCreate(t *testi
 // must surface it as an error so the controller reports Synced=False, not ReconcileSuccess.
 func TestUpdate_BrokenURL_NonPolling_404_SurfacesError(t *testing.T) {
 	httpMock := &MockHttpClient{
-		MockSendRequest: func(ctx context.Context, method, url string, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+		MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
 			return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: 404, Body: `{"error":"not found"}`}}, nil
 		},
 	}

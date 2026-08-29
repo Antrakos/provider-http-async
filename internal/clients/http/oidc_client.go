@@ -51,7 +51,7 @@ func NewOIDCClient(inner Client, cfg *common.OIDCConfig) Client {
 	}
 }
 
-func (c *oidcClient) SendRequest(ctx context.Context, method string, url string, body Data, headers Data, tlsConfig *TLSConfigData) (HttpDetails, error) {
+func (c *oidcClient) SendRequest(ctx context.Context, method string, url Data, body Data, headers Data, tlsConfig *TLSConfigData) (HttpDetails, error) {
 	tok, err := c.source.Token()
 	if err != nil {
 		return HttpDetails{}, errors.Wrap(err, "failed to obtain OIDC token")
