@@ -29,7 +29,7 @@ import (
 )
 
 // AsyncDisposableRequestParameters are the configurable fields of an AsyncDisposableRequest.
-// +kubebuilder:validation:XValidation:rule="!(self.insecureSkipTLSVerify == true && has(self.tlsConfig))",message="insecureSkipTLSVerify and tlsConfig are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!(has(self.insecureSkipTLSVerify) && self.insecureSkipTLSVerify && has(self.tlsConfig))",message="insecureSkipTLSVerify and tlsConfig are mutually exclusive"
 type AsyncDisposableRequestParameters struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Field 'forProvider.url' is immutable"
 	URL string `json:"url"`
