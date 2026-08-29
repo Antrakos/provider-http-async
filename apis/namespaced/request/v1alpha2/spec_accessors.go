@@ -191,10 +191,10 @@ var _ interfaces.CachedResponse = (*AsyncRequest)(nil)
 
 // GetCachedResponse returns the cached response from the status.
 func (r *AsyncRequest) GetCachedResponse() interfaces.HTTPResponse {
-	if r.Status.Response.StatusCode == 0 {
+	if r.Status.Cache.Response.StatusCode == 0 {
 		return nil
 	}
-	return &r.Status.Response
+	return &r.Status.Cache.Response
 }
 
 // Ensure AsyncRequest implements RequestStatusReader
