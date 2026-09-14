@@ -3,6 +3,10 @@ package utils
 import (
 	"context"
 
+	"github.com/pkg/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/Antrakos/provider-http-async/apis/interfaces"
@@ -17,6 +21,8 @@ const (
 type SetRequestStatusFunc func()
 
 // RequestResource is a struct that holds the status writer, resource object, request context, http response, http request, and local client.
+// StatusWriter and Resource must reference the same underlying CR: conflict-retry in
+// SetRequestResourceStatus refreshes Resource and re-applies the setters through StatusWriter.
 type RequestResource struct {
 	StatusWriter   interfaces.BaseStatusWriter // Common status writer interface
 	Resource       client.Object               // Underlying resource for status updates
@@ -96,11 +102,35 @@ func (rr *RequestResource) ResetFailures() SetRequestStatusFunc {
 	}
 }
 
-// SetRequestResourceStatus sets the status of a resource.
+// SetRequestResourceStatus sets the status of a resource, retrying on optimistic-lock
+// conflicts instead of failing the reconcile (the external call has typically already
+// succeeded by this point).
+//
+// Callers are expected to Get the latest resource before calling; the first attempt
+// writes against that state. On a conflict the resource is re-fetched and the setters
+// re-apply against server state — caller mutations applied after the caller's Get and
+// not expressed as setters (e.g. conditions marked in the Observe path) are dropped
+// from that write and re-applied by the next reconcile.
 func SetRequestResourceStatus(rr RequestResource, statusFuncs ...SetRequestStatusFunc) error {
-	for _, updateStatusFunc := range statusFuncs {
-		updateStatusFunc()
-	}
+	nn := types.NamespacedName{Name: rr.Resource.GetName(), Namespace: rr.Resource.GetNamespace()}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		for _, updateStatusFunc := range statusFuncs {
+			updateStatusFunc()
+		}
 
-	return rr.LocalClient.Status().Update(rr.RequestContext, rr.Resource)
+		err := rr.LocalClient.Status().Update(rr.RequestContext, rr.Resource)
+		if !apierrors.IsConflict(err) {
+			return err
+		}
+
+		// Re-fetch into the same pointer so the setters re-apply against server state
+		// on the next attempt — relative setters (e.g. Status.Failed++) must not stack
+		// on top of the failed attempt. The refresh also runs on the final (exhausted)
+		// attempt deliberately: it leaves the shared object with server state and a
+		// fresh resourceVersion for the reconciler's subsequent status write.
+		if getErr := rr.LocalClient.Get(rr.RequestContext, nn, rr.Resource); getErr != nil {
+			return errors.Wrap(getErr, "failed to re-get resource after status update conflict")
+		}
+		return err
+	})
 }
