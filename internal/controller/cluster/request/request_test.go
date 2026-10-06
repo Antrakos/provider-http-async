@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -22,7 +23,11 @@ import (
 
 	"github.com/Antrakos/provider-http-async/apis/cluster/request/v1alpha2"
 	"github.com/Antrakos/provider-http-async/apis/common"
+	"github.com/Antrakos/provider-http-async/apis/interfaces"
 	httpClient "github.com/Antrakos/provider-http-async/internal/clients/http"
+	"github.com/Antrakos/provider-http-async/internal/service"
+	"github.com/Antrakos/provider-http-async/internal/service/request"
+	"github.com/Antrakos/provider-http-async/internal/service/request/polling"
 )
 
 var (
@@ -1235,6 +1240,109 @@ func TestObserve_EmptyExternalRef_ObserveURLReferencesIt_RoutesToCreate(t *testi
 	if obs.ResourceExists {
 		t.Error("expected ResourceExists=false so the controller routes to Create(); got true (would route to Update and loop)")
 	}
+}
+
+// mockPollerCompleting reports the operation done immediately (for resume tests).
+type mockPollerCompleting struct{}
+
+func (m *mockPollerCompleting) Poll(
+	_ *service.ServiceContext,
+	_ *service.RequestCRContext,
+	_ interfaces.HTTPMapping,
+	_ map[string]interface{},
+) (polling.Result, error) {
+	return polling.Result{Done: true, PollResponse: map[string]interface{}{"body": map[string]interface{}{"id": "model-123"}}}, nil
+}
+
+// TestObserve_CreatePendingWedge_RoutesToRecovery pins the Observe routing that heals a
+// guard-wedged AsyncRequest once the reconciler proceeds past the guard.
+func TestObserve_CreatePendingWedge_RoutesToRecovery(t *testing.T) {
+	anchor := map[string]interface{}{
+		"statusCode": float64(202),
+		"body":       map[string]interface{}{"name": "projects/p/locations/us-central1/operations/op-123"},
+	}
+	wedgeAnnotations := map[string]string{
+		"crossplane.io/external-create-succeeded": "2026-01-01T00:00:00Z",
+		"crossplane.io/external-create-pending":   "2026-01-01T00:01:00Z",
+	}
+	wedgeMappings := []v1alpha2.Mapping{
+		{Method: "POST", Action: "CREATE", URL: ".payload.baseUrl", Body: ".payload.body",
+			Polling: &common.Polling{URL: `"http://api/" + .response.body.name`, Done: ".poll.response.body.done == true"}},
+		{Method: "GET", Action: "OBSERVE", URL: `.payload.baseUrl + "/" + .status.externalRef`},
+	}
+	wedgeCR := func(deleting bool) *v1alpha2.AsyncRequest {
+		return httpRequest(func(r *v1alpha2.AsyncRequest) {
+			r.Annotations = wedgeAnnotations
+			if deleting {
+				r.DeletionTimestamp = &v1.Time{Time: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)}
+			}
+			r.SetPollingResponse(anchor)
+			r.Status.Response = v1alpha2.Response{}
+			r.Spec.ForProvider.Mappings = wedgeMappings
+			r.Spec.ForProvider.ExternalRef = ".poll.response.body.id"
+		})
+	}
+
+	t.Run("Deleting_ReportsInFlightSoDeleteBranchResumesCreatePoll", func(t *testing.T) {
+		httpCalls := 0
+		httpMock := &MockHttpClient{
+			MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				httpCalls++
+				return httpClient.HttpDetails{}, nil
+			},
+		}
+		localKube := &test.MockClient{
+			MockGet:          test.NewMockGetFn(nil),
+			MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+		}
+		cr := wedgeCR(true)
+		e := &external{logger: logging.NewNopLogger(), localKube: localKube, http: httpMock}
+
+		obs, err := e.Observe(context.Background(), cr)
+		if err != nil {
+			t.Fatalf("Observe: unexpected error %v", err)
+		}
+		if !obs.ResourceExists || obs.ResourceUpToDate {
+			t.Errorf("Observe: want {Exists:true, UpToDate:false} so the runtime enters the delete branch and Delete() resumes the CREATE poll, got %+v", obs)
+		}
+
+		svcCtx := service.NewServiceContext(context.Background(), localKube, logging.NewNopLogger(), httpMock, nil)
+		if err := request.DeployAction(svcCtx, service.NewRequestCRContext(cr), v1alpha2.ActionCreate, &mockPollerCompleting{}); err != nil {
+			t.Fatalf("DeployAction(CREATE resume): unexpected error %v", err)
+		}
+		if httpCalls != 0 {
+			t.Errorf("resume must not re-fire the mutate while the anchor exists; got %d HTTP calls", httpCalls)
+		}
+		if cr.Status.ExternalRef != "model-123" {
+			t.Errorf("resume should extract externalRef from the poll result, got %q", cr.Status.ExternalRef)
+		}
+		if cr.Status.Polling.Response != nil {
+			t.Error("resume should clear the anchor on completion")
+		}
+	})
+
+	t.Run("NotDeleting_RoutesToCreateForAnchorResume", func(t *testing.T) {
+		httpMock := &MockHttpClient{
+			MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfigData *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+				t.Errorf("Observe must not fire HTTP for an anchor-resume wedge; got %s %s", method, url.Decrypted)
+				return httpClient.HttpDetails{}, nil
+			},
+		}
+		localKube := &test.MockClient{
+			MockGet:          test.NewMockGetFn(nil),
+			MockStatusUpdate: test.NewMockSubResourceUpdateFn(nil),
+		}
+		cr := wedgeCR(false)
+		e := &external{logger: logging.NewNopLogger(), localKube: localKube, http: httpMock}
+
+		obs, err := e.Observe(context.Background(), cr)
+		if err != nil {
+			t.Fatalf("Observe: unexpected error %v", err)
+		}
+		if obs.ResourceExists {
+			t.Errorf("Observe: want ResourceExists=false so the controller routes to Create() and resumes via the anchor, got %+v", obs)
+		}
+	})
 }
 
 // TestUpdate_BrokenURL_NonPolling_404_SurfacesError covers the secondary bug at the
