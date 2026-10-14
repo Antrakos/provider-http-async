@@ -7,6 +7,7 @@ import (
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/test"
+	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -216,5 +217,189 @@ func TestDeployAction_NoPollingPlainRequest(t *testing.T) {
 	}
 	if cr.Status.Polling.Response != nil {
 		t.Errorf("plain request should not set polling anchor")
+	}
+}
+
+// newInjectingKube returns a MockClient that simulates a persistent Secret store
+// (Get returns the current state, Update commits it), plus two getters: the final
+// Secret written via Update, and every status update snapshot (the polling anchor at
+// each persist). GetOrCreateSecret reads the Secret through Get and writes it back
+// through Update, so the captured Secret is the observable end state of the injection.
+func newInjectingKube() (*test.MockClient, func() *corev1.Secret, func() []*v1alpha2.AsyncDisposableRequest) {
+	var storedSecret *corev1.Secret
+	var statusSnapshots []*v1alpha2.AsyncDisposableRequest
+	var clusterSecret *corev1.Secret
+
+	kube := &test.MockClient{
+		MockGet: func(_ context.Context, key client.ObjectKey, obj client.Object) error {
+			if secret, ok := obj.(*corev1.Secret); ok {
+				if clusterSecret == nil {
+					clusterSecret = &corev1.Secret{ObjectMeta: v1.ObjectMeta{Name: key.Name, Namespace: key.Namespace}}
+				}
+				clusterSecret.DeepCopyInto(secret)
+			}
+			return nil
+		},
+		MockUpdate: func(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
+			if secret, ok := obj.(*corev1.Secret); ok {
+				secret.DeepCopyInto(clusterSecret)
+				storedSecret = secret.DeepCopy()
+			}
+			return nil
+		},
+		MockStatusUpdate: func(_ context.Context, obj client.Object, _ ...client.SubResourceUpdateOption) error {
+			if dr, ok := obj.(*v1alpha2.AsyncDisposableRequest); ok {
+				statusSnapshots = append(statusSnapshots, dr.DeepCopy())
+			}
+			return nil
+		},
+	}
+	return kube,
+		func() *corev1.Secret { return storedSecret },
+		func() []*v1alpha2.AsyncDisposableRequest { return statusSnapshots }
+}
+
+// TestDeployAction_PollingInjectsFromTriggerResponse is the parity regression test:
+// the trigger (create) response must feed the secret injection configs on the polling
+// path, exactly as AsyncRequest's mutate path and the non-polling DisposableRequest
+// path already do. A show-once credential returned only by the trigger response is
+// captured before the loop starts, survives finalization, and never appears raw in
+// status: the persisted anchor and status.response carry placeholders instead.
+func TestDeployAction_PollingInjectsFromTriggerResponse(t *testing.T) {
+	cr := newPollingCR()
+	cr.Spec.ForProvider.SecretInjectionConfigs = []common.SecretInjectionConfig{{
+		SecretRef: common.SecretRef{Name: "deploy-secret", Namespace: "testns"},
+		KeyMappings: []common.KeyInjection{{
+			SecretKey:            "token",
+			ResponseJQ:           `.body.token`,
+			MissingFieldStrategy: common.PreserveMissingField,
+		}},
+	}}
+	http := &mockHTTPClient{
+		trigger: httpClient.HttpResponse{StatusCode: 200, Body: `{"name":"operations/op-123","token":"sekrit"}`},
+		poll:    httpClient.HttpResponse{StatusCode: 200, Body: `{"done":true}`},
+	}
+	kube, storedSecret, statusSnapshots := newInjectingKube()
+
+	err := DeployAction(newSvcCtx(context.Background(), kube, http), service.NewDisposableRequestCRContext(cr))
+	if err != nil {
+		t.Fatalf("DeployAction returned error: %v", err)
+	}
+	if !cr.Status.Synced {
+		t.Errorf("expected Synced=true, got false")
+	}
+	if storedSecret() == nil {
+		t.Fatalf("expected the secret to be written")
+	}
+	if got := string(storedSecret().Data["token"]); got != "sekrit" {
+		t.Errorf("expected secret token=sekrit, got %q", got)
+	}
+
+	placeholder := "{{deploy-secret:testns:token}}"
+	snapshots := statusSnapshots()
+	if len(snapshots) < 2 {
+		t.Fatalf("expected at least 2 status updates (anchor persist + finalize), got %d", len(snapshots))
+	}
+	anchor := string(snapshots[0].Status.Polling.Response.Raw)
+	if !strings.Contains(anchor, placeholder) {
+		t.Errorf("expected anchor to hold the placeholder, got %s", anchor)
+	}
+	if strings.Contains(anchor, "sekrit") {
+		t.Errorf("anchor leaked the raw secret: %s", anchor)
+	}
+	if snapshots[len(snapshots)-1].Status.Polling.Response != nil {
+		t.Errorf("expected anchor cleared after finalize")
+	}
+	// The poll response contains no token, so the placeholder lives in the anchor;
+	// status.response must simply never carry the raw value.
+	if body := cr.Status.Response.Body; strings.Contains(body, "sekrit") {
+		t.Errorf("status.response leaked the raw secret: %q", body)
+	}
+}
+
+// TestDeployAction_PollingStillInjectsFromPollResponse guards the pre-existing
+// behavior the trigger injection must not break: fields that exist only in the final
+// poll response are still injected at finalization, and an injected poll-response
+// value is placeholder-ized in status.response (inject runs before the status writes).
+func TestDeployAction_PollingStillInjectsFromPollResponse(t *testing.T) {
+	cr := newPollingCR()
+	cr.Spec.ForProvider.SecretInjectionConfigs = []common.SecretInjectionConfig{{
+		SecretRef: common.SecretRef{Name: "deploy-secret", Namespace: "testns"},
+		KeyMappings: []common.KeyInjection{
+			{
+				SecretKey:            "modelId",
+				ResponseJQ:           `.body.response.deployedModel.id`,
+				MissingFieldStrategy: common.PreserveMissingField,
+			},
+			{
+				SecretKey:            "apiKey",
+				ResponseJQ:           `.body.response.deployedModel.apiKey`,
+				MissingFieldStrategy: common.PreserveMissingField,
+			},
+		},
+	}}
+	http := &mockHTTPClient{
+		trigger: httpClient.HttpResponse{StatusCode: 200, Body: `{"name":"operations/op-123"}`},
+		poll:    httpClient.HttpResponse{StatusCode: 200, Body: `{"done":true,"response":{"deployedModel":{"id":"dm-999","apiKey":"poll-secret"}}}`},
+	}
+	kube, storedSecret, _ := newInjectingKube()
+
+	err := DeployAction(newSvcCtx(context.Background(), kube, http), service.NewDisposableRequestCRContext(cr))
+	if err != nil {
+		t.Fatalf("DeployAction returned error: %v", err)
+	}
+	if !cr.Status.Synced {
+		t.Errorf("expected Synced=true, got false")
+	}
+	if storedSecret() == nil {
+		t.Fatalf("expected the secret to be written")
+	}
+	if got := string(storedSecret().Data["modelId"]); got != "dm-999" {
+		t.Errorf("expected secret modelId=dm-999, got %q", got)
+	}
+	if got := string(storedSecret().Data["apiKey"]); got != "poll-secret" {
+		t.Errorf("expected secret apiKey=poll-secret, got %q", got)
+	}
+	if body := cr.Status.Response.Body; strings.Contains(body, "poll-secret") {
+		t.Errorf("status.response leaked the raw poll secret: %q", body)
+	} else if !strings.Contains(body, "{{deploy-secret:testns:apiKey}}") {
+		t.Errorf("expected status.response to hold the placeholder, got %q", body)
+	}
+}
+
+// TestDeployAction_PollingDefaultDeleteWipesShowOnceKey pins the parity behavior for
+// the default missingFieldStrategy: the trigger injection writes the key, the
+// finalize injection evaluates the poll response, finds the field missing, and deletes
+// the key — exactly how AsyncRequest and base Request treat show-once fields when
+// later responses lack them. The API server applies "delete" when the field is
+// omitted; unit tests bypass defaults, so it is set explicitly here.
+func TestDeployAction_PollingDefaultDeleteWipesShowOnceKey(t *testing.T) {
+	cr := newPollingCR()
+	cr.Spec.ForProvider.SecretInjectionConfigs = []common.SecretInjectionConfig{{
+		SecretRef: common.SecretRef{Name: "deploy-secret", Namespace: "testns"},
+		KeyMappings: []common.KeyInjection{{
+			SecretKey:            "token",
+			ResponseJQ:           `.body.token`,
+			MissingFieldStrategy: common.DeleteMissingField,
+		}},
+	}}
+	http := &mockHTTPClient{
+		trigger: httpClient.HttpResponse{StatusCode: 200, Body: `{"name":"operations/op-123","token":"sekrit"}`},
+		poll:    httpClient.HttpResponse{StatusCode: 200, Body: `{"done":true}`},
+	}
+	kube, storedSecret, _ := newInjectingKube()
+
+	err := DeployAction(newSvcCtx(context.Background(), kube, http), service.NewDisposableRequestCRContext(cr))
+	if err != nil {
+		t.Fatalf("DeployAction returned error: %v", err)
+	}
+	if !cr.Status.Synced {
+		t.Errorf("expected Synced=true, got false")
+	}
+	if storedSecret() == nil {
+		t.Fatalf("expected the secret to be written")
+	}
+	if _, exists := storedSecret().Data["token"]; exists {
+		t.Errorf("expected the token key to be deleted by the finalize injection (parity with sibling kinds)")
 	}
 }

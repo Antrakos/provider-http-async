@@ -58,6 +58,17 @@ func asPollingAware(crCtx *service.DisposableRequestCRContext) (PollingAware, bo
 // beginPolling persists the trigger response as the poll anchor, records the request
 // details, then drives the poll loop. It is called after a successful trigger request.
 func beginPolling(svcCtx *service.ServiceContext, crCtx *service.DisposableRequestCRContext, pa PollingAware, triggerResp httpClient.HttpDetails) error {
+	// Injection must run before the anchor map is built: it replaces extracted values
+	// in triggerResp with placeholders, so status.polling.response stores placeholders
+	// instead of raw secrets. This is also the only injection the trigger response ever
+	// receives on the polling path (finalizeSuccess injects from the final poll response),
+	// so show-once credentials are captured here.
+	if spec := crCtx.Spec(); len(spec.GetSecretInjectionConfigs()) > 0 {
+		if obj, ok := crCtx.GetCR().(metav1.Object); ok {
+			datapatcher.ApplyResponseDataToSecrets(svcCtx.Ctx, svcCtx.LocalKube, svcCtx.Logger, &triggerResp.HttpResponse, spec.GetSecretInjectionConfigs(), obj)
+		}
+	}
+
 	triggerMap := responseToMap(&triggerResp.HttpResponse)
 
 	pa.SetPollingResponse(triggerMap)
@@ -176,6 +187,15 @@ func finalizeSuccess(svcCtx *service.ServiceContext, crCtx *service.DisposableRe
 		return err
 	}
 
+	// Injection must run before the status writes below: it replaces extracted values
+	// in pollResp with placeholders, so status.response stores the placeholder form —
+	// the same inject-then-store order as the non-polling path.
+	if isExpected && len(spec.GetSecretInjectionConfigs()) > 0 {
+		if obj, ok := crCtx.GetCR().(metav1.Object); ok {
+			datapatcher.ApplyResponseDataToSecrets(svcCtx.Ctx, svcCtx.LocalKube, svcCtx.Logger, pollResp, spec.GetSecretInjectionConfigs(), obj)
+		}
+	}
+
 	// The poll response is the meaningful state for a completed LRO; persist it.
 	writer.SetStatusCode(pollResp.StatusCode)
 	writer.SetHeaders(pollResp.Headers)
@@ -188,12 +208,6 @@ func finalizeSuccess(svcCtx *service.ServiceContext, crCtx *service.DisposableRe
 	if !isExpected {
 		writer.SetError(errors.New(errResponseFormat + "reached (poll response did not match expectedResponse)"))
 		return persistStatus(svcCtx, crCtx)
-	}
-
-	if len(spec.GetSecretInjectionConfigs()) > 0 {
-		if obj, ok := crCtx.GetCR().(metav1.Object); ok {
-			datapatcher.ApplyResponseDataToSecrets(svcCtx.Ctx, svcCtx.LocalKube, svcCtx.Logger, pollResp, spec.GetSecretInjectionConfigs(), obj)
-		}
 	}
 
 	writer.SetSynced(true)
