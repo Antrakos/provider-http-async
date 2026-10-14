@@ -6,13 +6,4 @@
 
 package v1alpha2
 
-import resource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
-
-// GetItems of this ClusterProviderConfigUsageList.
-func (p *ClusterProviderConfigUsageList) GetItems() []resource.ProviderConfigUsage {
-	items := make([]resource.ProviderConfigUsage, len(p.Items))
-	for i := range p.Items {
-		items[i] = &p.Items[i]
-	}
-	return items
-}
+// GetItems of this ProviderConfigUsageList.
