@@ -75,6 +75,45 @@ The result is stored in `status.externalRef` and available as `.status.externalR
 all subsequent jq expressions — OBSERVE URL, UPDATE URL, DELETE URL, and
 `expectedResponseCheck`.
 
+### Read-only / OBSERVE-only mode
+
+An `AsyncRequest` doesn't require a mapping for every action. If a mapping isn't found
+for CREATE, UPDATE, or REMOVE, the provider logs it and skips that action — it's not
+treated as an error. Defining only an OBSERVE (GET) mapping therefore turns an
+`AsyncRequest` into a periodic, read-only poller: on every reconcile it issues the GET,
+and — combined with `secretInjectionConfigs` — can extract fields from the response into
+a Secret without ever attempting to create, update, or remove anything.
+
+This is useful for syncing data from an existing endpoint you don't manage the lifecycle
+of — for example, mirroring a value from an external API into a Secret so other resources
+can reference it.
+
+```yaml
+apiVersion: http.async.crossplane.io/v1alpha2
+kind: AsyncRequest
+metadata:
+  name: sync-external-status
+spec:
+  forProvider:
+    headers:
+      Authorization:
+        - "Bearer {{ auth:default:token }}"
+    payload:
+      baseUrl: "https://api.example.com/v1/status"
+    mappings:
+      # Only an OBSERVE mapping - no CREATE, UPDATE, or REMOVE, so this
+      # AsyncRequest never attempts to modify anything at the remote endpoint.
+      - action: OBSERVE
+        url: .payload.baseUrl
+    secretInjectionConfigs:
+      - secretRef:
+          name: external-status
+          namespace: default
+        keyMappings:
+          - secretKey: status
+            responseJQ: .body.status
+```
+
 ### Sub-resource existence: `resourceExistsCheck`
 
 Some APIs have no dedicated GET for the resource you manage — the only way to observe

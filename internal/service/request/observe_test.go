@@ -376,7 +376,7 @@ func Test_isUpToDate(t *testing.T) {
 				}),
 			},
 			want: want{
-				err: errors.New("OBSERVE or GET mapping doesn't exist in request, skipping operation"),
+				err: errors.Errorf(requestmapping.ErrMappingNotFound, "OBSERVE", http.MethodGet),
 			},
 		},
 		"MissingMappingObjectCreated": {
@@ -402,7 +402,7 @@ func Test_isUpToDate(t *testing.T) {
 				}),
 			},
 			want: want{
-				err: errors.New("OBSERVE or GET mapping doesn't exist in request, skipping operation"),
+				err: errors.Errorf(requestmapping.ErrMappingNotFound, "OBSERVE", http.MethodGet),
 			},
 		},
 		// Empty externalRef + OBSERVE URL referencing .status.externalRef + no prior identity:
