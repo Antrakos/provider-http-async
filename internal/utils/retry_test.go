@@ -101,6 +101,15 @@ func Test_RetriesLimitReached(t *testing.T) {
 				result: false,
 			},
 		},
+		"ResultFalseNil": {
+			args: args{
+				statusFailed:         failures,
+				rollbackRetriesLimit: nil,
+			},
+			want: want{
+				result: false,
+			},
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
