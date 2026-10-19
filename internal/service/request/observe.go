@@ -25,6 +25,7 @@ const (
 	errNotValidJSON              = "%s is not a valid JSON string: %s"
 	errConvertResToMap           = "failed to convert response to map"
 	errExpectedResponseCheckType = "%s.Type should be either DEFAULT, CUSTOM or empty"
+	errObserveStatusUnknown      = "OBSERVE returned status code %d; the resource state is unknown and the resource is not treated as removed"
 
 	// errUpdateMappingNotFound is the terminal message surfaced when OBSERVE
 	// determines the resource is out of sync (expectedResponseCheck: false) but
@@ -259,15 +260,11 @@ func observeExternalRefDriven(
 	}
 
 	details, responseErr := svcCtx.HTTP.SendRequest(svcCtx.Ctx, requestmapping.GetEffectiveMethod(mapping), requestDetails.Url, requestDetails.Body, requestDetails.Headers, svcCtx.TLSConfigData)
-	// A non-2xx against an established identity (e.g. 404) means the resource no longer exists →
-	// Create. isObjectValidForObservation is NOT consulted: identity was decided by externalRef.
-	// A non-2xx listed in spec.allowedStatusCodes is not an error, so it does NOT route to Create:
-	// the resource exists and its OBSERVE answer is taken at face value (falls through to drift).
-	if !utils.IsHTTPSuccess(details.HttpResponse.StatusCode) && utils.IsHTTPError(details.HttpResponse.StatusCode, spec.GetAllowedStatusCodes()) {
-		return FailedObserve(), errors.New(observe.ErrObjectNotFound)
-	}
 	if err := determineIfRemoved(svcCtx, crCtx, details, responseErr); err != nil {
 		return FailedObserve(), err
+	}
+	if !utils.IsHTTPSuccess(details.HttpResponse.StatusCode) && utils.IsHTTPError(details.HttpResponse.StatusCode, spec.GetAllowedStatusCodes()) {
+		return FailedObserve(), errors.Errorf(errObserveStatusUnknown, details.HttpResponse.StatusCode)
 	}
 
 	// resourceExistsCheck (optional): decouples existence from drift for sub-resources embedded in

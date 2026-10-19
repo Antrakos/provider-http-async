@@ -1669,3 +1669,119 @@ func TestIsUpToDate_PolledConstantURL_NotRejected(t *testing.T) {
 		t.Error("expected OBSERVE to fire for a polled constant-URL resource")
 	}
 }
+
+func TestIsUpToDate_ExternalRef_NonSuccessStatusClassification(t *testing.T) {
+	const observeErrStatusUnknown = "OBSERVE returned status code %d; the resource state is unknown and the resource is not treated as removed"
+
+	type args struct {
+		statusCode   int
+		allowed      []int
+		isRemoved    *v1alpha2.ExpectedResponseCheck
+		beingDeleted bool
+	}
+	type want struct {
+		err      error
+		observed bool
+		synced   bool
+	}
+
+	cases := map[string]struct {
+		args args
+		want want
+	}{
+		"NotFoundRoutesToCreate": {
+			args: args{statusCode: http.StatusNotFound},
+			want: want{err: errNotFound, observed: true},
+		},
+		"ServiceUnavailableIsUnknownNotGone": {
+			args: args{statusCode: http.StatusServiceUnavailable},
+			want: want{err: errors.Errorf(observeErrStatusUnknown, http.StatusServiceUnavailable), observed: true},
+		},
+		"ServiceUnavailableDuringDeletionIsUnknownNotGone": {
+			args: args{statusCode: http.StatusServiceUnavailable, beingDeleted: true},
+			want: want{err: errors.Errorf(observeErrStatusUnknown, http.StatusServiceUnavailable), observed: true},
+		},
+		"TooManyRequestsIsUnknownNotGone": {
+			args: args{statusCode: http.StatusTooManyRequests},
+			want: want{err: errors.Errorf(observeErrStatusUnknown, http.StatusTooManyRequests), observed: true},
+		},
+		"UnauthorizedIsUnknownNotGone": {
+			args: args{statusCode: http.StatusUnauthorized},
+			want: want{err: errors.Errorf(observeErrStatusUnknown, http.StatusUnauthorized), observed: true},
+		},
+		"ForbiddenDuringDeletionIsUnknownNotGone": {
+			args: args{statusCode: http.StatusForbidden, beingDeleted: true},
+			want: want{err: errors.Errorf(observeErrStatusUnknown, http.StatusForbidden), observed: true},
+		},
+		"AllowedStatusCodeFallsThroughToDrift": {
+			args: args{statusCode: http.StatusTeapot, allowed: []int{http.StatusTeapot}},
+			want: want{observed: true, synced: true},
+		},
+		"CustomIsRemovedCheckDecidesGone": {
+			args: args{
+				statusCode: http.StatusServiceUnavailable,
+				isRemoved: &v1alpha2.ExpectedResponseCheck{
+					Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
+					Logic: `.response.statusCode == 503`,
+				},
+			},
+			want: want{err: errNotFound, observed: true},
+		},
+		"CustomIsRemovedCheckNotMatchedKeepsUnknownState": {
+			args: args{
+				statusCode: http.StatusServiceUnavailable,
+				isRemoved: &v1alpha2.ExpectedResponseCheck{
+					Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
+					Logic: `.response.statusCode == 410`,
+				},
+			},
+			want: want{err: errors.Errorf(observeErrStatusUnknown, http.StatusServiceUnavailable), observed: true},
+		},
+	}
+
+	for name, tc := range cases {
+		tc := tc
+
+		t.Run(name, func(t *testing.T) {
+			observed := false
+			cr := httpRequest(func(r *v1alpha2.AsyncRequest) {
+				r.Status.ExternalRef = "789"
+				r.Spec.ForProvider.Payload.BaseUrl = "https://api.example.com"
+				r.Spec.ForProvider.AllowedStatusCodes = tc.args.allowed
+				r.Spec.ForProvider.Mappings = []v1alpha2.Mapping{
+					{Method: "POST", Action: "CREATE", URL: `.payload.baseUrl + "/models:upload"`, Body: ".payload.body"},
+					{Method: "GET", Action: "OBSERVE", URL: `.payload.baseUrl + "/models/" + .status.externalRef`},
+					{Method: "DELETE", Action: "REMOVE", URL: `.payload.baseUrl + "/models/" + .status.externalRef`},
+				}
+				r.Spec.ForProvider.ExpectedResponseCheck = v1alpha2.ExpectedResponseCheck{
+					Type:  v1alpha2.ExpectedResponseCheckTypeCustom,
+					Logic: `.response.body.ok == true`,
+				}
+				if tc.args.isRemoved != nil {
+					r.Spec.ForProvider.IsRemovedCheck = *tc.args.isRemoved
+				}
+				if tc.args.beingDeleted {
+					now := v1.Now()
+					r.SetDeletionTimestamp(&now)
+				}
+			})
+			svcCtx := service.NewServiceContext(context.Background(), mockKube(), logging.NewNopLogger(), &MockHttpClient{
+				MockSendRequest: func(ctx context.Context, method string, url httpClient.Data, body, headers httpClient.Data, tlsConfig *httpClient.TLSConfigData) (httpClient.HttpDetails, error) {
+					observed = true
+					return httpClient.HttpDetails{HttpResponse: httpClient.HttpResponse{StatusCode: tc.args.statusCode, Body: `{"ok": true}`}}, nil
+				},
+			}, nil)
+
+			got, err := IsUpToDate(svcCtx, service.NewRequestCRContext(cr))
+			if diff := cmp.Diff(tc.want.err, err, test.EquateErrors()); diff != "" {
+				t.Fatalf("IsUpToDate(...): -want error, +got error: %s", diff)
+			}
+			if observed != tc.want.observed {
+				t.Errorf("OBSERVE fired = %v, want %v", observed, tc.want.observed)
+			}
+			if got.Synced != tc.want.synced {
+				t.Errorf("Synced = %v, want %v", got.Synced, tc.want.synced)
+			}
+		})
+	}
+}
